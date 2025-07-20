@@ -88,6 +88,8 @@ int main(int argc, char* argv[]) {
     log_zenith(LOG_INFO, "Daemon started as PID %d", getpid());
     
     init_global_freq_bounds();
+    int min_freq = global_min_freq;
+    int max_freq = global_max_freq;
         
 while (1) {
     usleep(LOOP_INTERVAL);
@@ -114,6 +116,7 @@ while (1) {
     prev_usage = curr_usage;
 
     // STEP 2: Calculate target frequency
+    
     int target_freq = calculate_target_frequency(min_freq, max_freq, curr_usage);
 
     // STEP 2.1: Is target frequency same as current?
