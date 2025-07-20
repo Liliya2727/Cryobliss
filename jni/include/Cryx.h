@@ -60,7 +60,6 @@ extern int global_min_freq;
 void init_global_freq_bounds(void);
 extern int global_max_freq;
 int read_int_from_file(const char *path);
-float get_usage_for_policy(const char *policy_id);
 void apply_min_frequency_all(void);
 int write_int_to_file(const char *path, int value);
 

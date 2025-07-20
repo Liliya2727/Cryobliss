@@ -153,7 +153,7 @@ void apply_frequency_all(void) {
             continue;
 
         // You need to implement this function to get current usage per policy
-        float curr_usage = get_usage_for_policy(entry->d_name);  // e.g., "policy0", "policy4"
+        float curr_usage = get_cpu_usage(); 
 
         int target_freq = calculate_target_frequency(min_freq, max_freq, curr_usage);
 
@@ -226,38 +226,6 @@ void set_all_to_min_freq(void) {
     apply_min_frequency_all();
 }
 
-
-float get_usage_for_policy(const char *policy_id) {
-    char path[128];
-    snprintf(path, sizeof(path),
-             "/sys/devices/system/cpu/cpufreq/%s/stats/time_in_state", policy_id);
-
-    FILE *fp = fopen(path, "r");
-    if (!fp) return 0.0f;
-
-    char line[128];
-    unsigned long long total_time = 0, busy_time = 0;
-
-    while (fgets(line, sizeof(line), fp)) {
-        unsigned long freq = 0;
-        unsigned long long time = 0;
-
-        if (sscanf(line, "%lu %llu", &freq, &time) == 2) {
-            total_time += time;
-            if (freq > 0) busy_time += time;
-        }
-    }
-
-    fclose(fp);
-
-    // Avoid division by zero
-    if (total_time == 0) return 0.0f;
-
-    // Normalize to percentage
-    float curr_usage = (busy_time * 100.0f) / total_time;
-
-    return curr_usage;
-}
 
 int write_int_to_file(const char *path, int value) {
     int fd = open(path, O_WRONLY);
