@@ -50,7 +50,6 @@ typedef enum : char {
 extern char* custom_log_tag;
 extern float prev_usage;
 extern int prev_freq;
-extern int screen_off;
 float get_cpu_usage(void);
 int calculate_target_frequency(float usage);
 void apply_frequency_all(int freq);
