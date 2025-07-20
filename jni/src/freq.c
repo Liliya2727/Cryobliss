@@ -231,7 +231,7 @@ void set_all_to_min_freq(void) {
 
 int get_usage_for_policy(int policy_id) {
     // You can expand this with actual /proc/stat reading later.
-    log_zenith(LOG_INFO, "get_usage_for_policy(%s) called", policy);
+    log_zenith(LOG_INFO, "get_usage_for_policy(%s) called", policy_id);
     return 0;
 }
 
