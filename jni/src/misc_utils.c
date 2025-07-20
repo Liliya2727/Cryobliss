@@ -110,7 +110,7 @@ void is_kanged(void) {
 
 doorprize:
     log_zenith(LOG_FATAL, "Module modified by 3rd party, exiting.");
-    notify("Trying to rename me?");
+   
     exit(EXIT_FAILURE);
 }
 
