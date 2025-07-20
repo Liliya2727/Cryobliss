@@ -15,6 +15,7 @@
  */
 
 #include <Cryx.h>
+#include <android/log.h>
 
 char* custom_log_tag = NULL;
 const char* level_str[] = {"D", "I", "W", "E", "F"};
