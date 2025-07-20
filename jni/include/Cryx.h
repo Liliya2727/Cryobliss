@@ -52,7 +52,6 @@ extern float prev_usage;
 extern int prev_freq;
 float get_cpu_usage(void);
 int calculate_target_frequency(int min_freq, int max_freq, float curr_usage);
-void apply_frequency_all(void);
 int is_screen_on(void);
 extern bool screen_off;
 void set_all_to_min_freq(void);
