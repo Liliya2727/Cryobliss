@@ -52,13 +52,16 @@ extern float prev_usage;
 extern int prev_freq;
 float get_cpu_usage(void);
 int calculate_target_frequency(float usage);
-void apply_frequency_all(int freq);
+void apply_frequency_all(void);
 int is_screen_on(void);
 extern bool screen_off;
 void set_all_to_min_freq(void);
 extern int global_min_freq;
 void init_global_freq_bounds(void);
 extern int global_max_freq;
+int read_int_from_file(const char *path);
+float get_usage_for_policy(const char *policy);
+void write_int_to_file(const char *path, int value);
 
 /*
  * If you're here for function comments, you
