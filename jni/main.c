@@ -118,7 +118,7 @@ while (1) {
 
     // STEP 2.1: Is target frequency same as current?
     if (target_freq == prev_freq) {
-        log_zenith(LOG_DEBUG, "Frequency unchanged, keep going);
+        log_zenith(LOG_DEBUG, "Frequency unchanged, keep going");
         continue;
     }
 
