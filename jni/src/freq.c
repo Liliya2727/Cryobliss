@@ -121,7 +121,7 @@ int calculate_target_frequency(int min_freq, int max_freq, float curr_usage) {
     if (curr_usage < 10.0f) return min_freq;
     if (curr_usage > 90.0f) return max_freq;
 
-    float ratio = usage / 100.0f;
+    float ratio = curr_usage / 100.0f;
     return min_freq + (int)((max_freq - min_freq) * ratio);
 }
 
@@ -153,7 +153,7 @@ void apply_frequency_all(void) {
             continue;
 
         // You need to implement this function to get current usage per policy
-        float usage = get_usage_for_policy(entry->d_name);  // e.g., "policy0", "policy4"
+        float curr_usage = get_usage_for_policy(entry->d_name);  // e.g., "policy0", "policy4"
 
         int target_freq = calculate_target_frequency(min_freq, max_freq, curr_usage);
 
@@ -167,7 +167,7 @@ void apply_frequency_all(void) {
         write_int_to_file(path_set_min, target_freq);
         write_int_to_file(path_set_max, target_freq);
 
-        log_zenith(LOG_INFO, "%s usage=%.2f%% → freq=%d MHz", entry->d_name, usage, target_freq);
+        log_zenith(LOG_INFO, "%s usage=%.2f%% → freq=%d MHz", entry->d_name, curr_usage, target_freq);
     }
 
     closedir(dir);
@@ -254,9 +254,9 @@ float get_usage_for_policy(const char *policy_id) {
     if (total_time == 0) return 0.0f;
 
     // Normalize to percentage
-    float usage = (busy_time * 100.0f) / total_time;
+    float curr_usage = (busy_time * 100.0f) / total_time;
 
-    return usage;
+    return curr_usage;
 }
 
 int write_int_to_file(const char *path, int value) {
