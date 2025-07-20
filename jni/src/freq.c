@@ -229,10 +229,10 @@ void set_all_to_min_freq(void) {
 }
 
 
-int get_usage_for_policy(int policy_id) {
-    // You can expand this with actual /proc/stat reading later.
+float get_usage_for_policy(const char *policy_id) {
     log_zenith(LOG_INFO, "get_usage_for_policy(%s) called", policy_id);
-    return 0;
+
+    return 50.0f; 
 }
 
 int write_int_to_file(const char *path, int value) {
