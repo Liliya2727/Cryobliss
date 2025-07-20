@@ -18,34 +18,20 @@
 
 CONF="/data/adb/.config/Cryx"
 CPU="/sys/devices/system/cpu/cpu0/cpufreq"
-# Parse Governor to use
+
+# Parse Governor and Frequency to use
 chmod 644 "$CPU/scaling_governor"
-default_gov=$(cat "$CPU/scaling_governor")
-echo "$default_gov" >$CONF/default_cpu_gov
-# Cleanup old Logs
-rm -f /data/adb/.config/Cryobliss/Cryx.log
+
+# Remove old logs
+rm -f /data/adb/.config/Cryx/Cryx.log
+
+# Make Dir
+mkdir -p "$CONF"
+
 # Wait for boot to Complete
 while [ "$(getprop sys.boot_completed)" != "1" ]; do  
     sleep 40
 done
-
-# Fallback to normal gov if default is performance
-if [ "$default_gov" == "performance" ] && [ ! -f $CONF/custom_default_cpu_gov ]; then
-	for gov in scx schedhorizon walt sched_pixel sugov_ext uag schedplus energy_step schedutil interactive conservative powersave; do
-		grep -q "$gov" "$CPU/scaling_available_governors" && {
-			echo "$gov" >$CONF/default_cpu_gov
-			default_gov="$gov"
-			break
-		}
-	done
-fi
-# Revert governor
-custom_gov="$CONF/custom_default_cpu_gov"
-[ -f "$custom_gov" ] && default_gov=$(cat "$custom_gov")
-echo "$default_gov" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-[ ! -f $CONF/custom_powersave_cpu_gov ] && echo "$default_gov" >$CONF/custom_powersave_cpu_gov
-[ ! -f $CONF/custom_game_cpu_gov ] && echo "$default_gov" >$CONF/custom_game_cpu_gov
-
 
 # Run Daemon
 Cryx

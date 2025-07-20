@@ -29,7 +29,7 @@ unzip -o "$ZIPFILE" 'verify.sh' -d "$TMPDIR" >&2
 [ ! -f "$TMPDIR/verify.sh" ] && abort_corrupted
 source "$TMPDIR/verify.sh"
 
-# Extract Module files
+# Extract Module file
 mkdir -p "$MODPATH/system/bin"
 ui_print "- Extracting service.sh..."
 extract "$ZIPFILE" service.sh "$MODPATH"

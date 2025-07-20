@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 Rem01Gaming
+ * Copyright (C) 2024-2025 Zexshia
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -98,7 +98,7 @@ char* timern(void) {
  * Description        : Checks if the module renamed/modified by 3rd party.
  ***********************************************************************************/
 void is_kanged(void) {
-    if (systemv("grep -q '^name=Cryobliss Optimization$' %s", MODULE_PROP) != 0) [[clang::unlikely]] {
+    if (systemv("grep -q '^name=Cryobliss$' %s", MODULE_PROP) != 0) [[clang::unlikely]] {
         goto doorprize;
     }
 

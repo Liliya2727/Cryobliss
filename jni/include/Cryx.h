@@ -12,6 +12,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#define MAX_CPU_CORES 16
+#define CPU_STAT_PATH "/proc/stat"
+#define MTK_BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/brightness"
 
 #define LOOP_INTERVAL 15
 #define MAX_DATA_LENGTH 1024
@@ -44,6 +47,16 @@ typedef enum : char {
 
 
 extern char* custom_log_tag;
+extern float prev_usage;
+extern int prev_freq;
+extern int screen_off;
+float get_cpu_usage(void);
+int calculate_target_frequency(float usage);
+void apply_frequency_all(int freq);
+int is_screen_on(void);
+void set_all_to_min_freq(void);
+extern int global_min_freq;
+extern int global_max_freq;
 
 /*
  * If you're here for function comments, you
