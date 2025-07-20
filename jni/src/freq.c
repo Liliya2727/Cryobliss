@@ -32,12 +32,14 @@ bool screen_off = false;
  * Function Name      : freq
  * Description        : check cpu max and minfreq
  ***********************************************************************************/
+
 void init_global_freq_bounds(void) {
     DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
     if (!dir) return;
 
     struct dirent *entry;
-    int min_found = 0, max_found = 0;
+    global_min_freq = INT_MAX;
+    global_max_freq = -1;
 
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "policy", 6) != 0) continue;
@@ -57,15 +59,11 @@ void init_global_freq_bounds(void) {
             if (fscanf(fp_min, "%d", &min_freq) == 1 &&
                 fscanf(fp_max, "%d", &max_freq) == 1) {
 
-                if (!min_found || min_freq < global_min_freq) {
-                    global_min_freq = min_freq;
-                    min_found = 1;
-                }
+                // Log this policy's min/max
+                log_zenith(LOG_INFO, "%s: min=%d max=%d", entry->d_name, min_freq, max_freq);
 
-                if (!max_found || max_freq > global_max_freq) {
-                    global_max_freq = max_freq;
-                    max_found = 1;
-                }
+                if (min_freq < global_min_freq) global_min_freq = min_freq;
+                if (max_freq > global_max_freq) global_max_freq = max_freq;
             }
         }
 
@@ -74,44 +72,12 @@ void init_global_freq_bounds(void) {
     }
 
     closedir(dir);
-}
-void log_policy_freqs(void) {
-    char path[64];
-    char buf[32];
 
-    for (int i = 0; i < 16; i++) {  // max 16 clusters
-        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpufreq/policy%d", i);
-        if (access(path, F_OK) != 0) {
-            break;
-        }
-
-        char min_path[128], max_path[128];
-        snprintf(min_path, sizeof(min_path), "%s/cpuinfo_min_freq", path);
-        snprintf(max_path, sizeof(max_path), "%s/cpuinfo_max_freq", path);
-
-        int min_freq = -1, max_freq = -1;
-
-        FILE *fmin = fopen(min_path, "r");
-        if (fmin) {
-            if (fgets(buf, sizeof(buf), fmin)) {
-                min_freq = atoi(buf);
-            }
-            fclose(fmin);
-        }
-
-        FILE *fmax = fopen(max_path, "r");
-        if (fmax) {
-            if (fgets(buf, sizeof(buf), fmax)) {
-                max_freq = atoi(buf);
-            }
-            fclose(fmax);
-        }
-
-        if (min_freq != -1 && max_freq != -1) {
-            log_zenith(LOG_INFO, "Policy%d: min=%d max=%d", i, min_freq, max_freq);
-        } else {
-            log_zenith(LOG_WARN, "Policy%d: Failed to read min/max freq", i);
-        }
+    // Optional: log the final global bounds
+    if (global_min_freq != INT_MAX && global_max_freq != -1) {
+        log_zenith(LOG_INFO, "Global bounds: min=%d max=%d", global_min_freq / 1000.0, global_max_freq / 1000.0);
+    } else {
+        log_zenith(LOG_WARN, "Failed to determine global frequency bounds");
     }
 }
 /***********************************************************************************
@@ -162,43 +128,39 @@ int calculate_target_frequency(float usage) {
  * Function Name      : apply freq
  * Description        : apply scaling max and min freq
  ***********************************************************************************/
- 
+
 void apply_frequency_all(int freq) {
-    for (int i = 0; i < MAX_CPU_CORES; i++) {
-        char path_max[128], path_min[128];
+    DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
+    if (!dir) return;
 
-        snprintf(path_max, sizeof(path_max), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", i);
-        snprintf(path_min, sizeof(path_min), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", i);
+    struct dirent *entry;
 
-        FILE *fp_max = fopen(path_max, "w");
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "policy", 6) != 0)
+            continue;
+
+        char path_min[128], path_max[128];
+
+        snprintf(path_min, sizeof(path_min),
+                 "/sys/devices/system/cpu/cpufreq/%s/scaling_min_freq", entry->d_name);
+        snprintf(path_max, sizeof(path_max),
+                 "/sys/devices/system/cpu/cpufreq/%s/scaling_max_freq", entry->d_name);
+
         FILE *fp_min = fopen(path_min, "w");
+        FILE *fp_max = fopen(path_max, "w");
+
+        if (fp_min) {
+            fprintf(fp_min, "%d", freq);
+            fclose(fp_min);
+        }
 
         if (fp_max) {
             fprintf(fp_max, "%d", freq);
             fclose(fp_max);
         }
-
-        if (fp_min) {
-            fprintf(fp_min, "%d", freq);  // Ensure it doesn't fall below
-            fclose(fp_min);
-        }
     }
-}
-void log_current_policy_freqs(void) {
-    char path[64], buf[32];
-    for (int i = 0; i < 16; i++) {
-        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq", i);
-        if (access(path, F_OK) != 0) {
-            break;
-        }
 
-        FILE *f = fopen(path, "r");
-        if (f && fgets(buf, sizeof(buf), f)) {
-            int freq = atoi(buf);
-            log_zenith(LOG_DEBUG, "Policy%d current freq: %d GHz", i, freq);
-            fclose(f);
-        }
-    }
+    closedir(dir);
 }
 /***********************************************************************************
  * Function Name      : check screenon
