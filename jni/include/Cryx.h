@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 
-extern unsigned int LOOP_INTERVAL;
+#define LOOP_INTERVAL 15
 #define MAX_DATA_LENGTH 1024
 #define MAX_COMMAND_LENGTH 600
 #define MAX_OUTPUT_LENGTH 256

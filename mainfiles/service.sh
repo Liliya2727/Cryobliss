@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-CONF="/data/adb/.config/Cryobliss"
+CONF="/data/adb/.config/Cryx"
 CPU="/sys/devices/system/cpu/cpu0/cpufreq"
 # Parse Governor to use
 chmod 644 "$CPU/scaling_governor"
