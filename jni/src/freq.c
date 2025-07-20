@@ -23,6 +23,11 @@
 
 unsigned long long last_total = 0, last_idle = 0;
 
+
+int global_min_freq = 0;
+int global_max_freq = 0;
+bool screen_off = false;
+
 /***********************************************************************************
  * Function Name      : freq
  * Description        : check cpu max and minfreq

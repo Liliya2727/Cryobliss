@@ -17,7 +17,8 @@
 #include <Cryx.h>
 #include <libgen.h>
 #include <math.h>
-
+float prev_usage = -1.0f;
+int prev_freq = -1;
             
 int main(int argc, char* argv[]) {
     // Handle case when not running on root
