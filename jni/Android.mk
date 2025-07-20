@@ -17,5 +17,6 @@ LOCAL_CFLAGS := -DNDEBUG -Wall -Wextra -Werror \
                 -O2 -std=c23 -fPIC -flto
 
 LOCAL_LDFLAGS := -flto
+LOCAL_LDLIBS  += -llog  
+
 include $(BUILD_EXECUTABLE)
-LOCAL_LDLIBS += -llog
