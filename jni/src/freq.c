@@ -114,7 +114,7 @@ float get_cpu_usage(void) {
  * Description        : Calculate target freq based kn usage
  ***********************************************************************************/
  
-int calculate_target_frequency(int min_freq, int max_freq, float usage) {
+int calculate_target_frequency(int min_freq, int max_freq, float curr_usage) {
     if (min_freq <= 0 || max_freq <= 0 || max_freq < min_freq)
         return 0;
 
@@ -155,7 +155,7 @@ void apply_frequency_all(void) {
         // You need to implement this function to get current usage per policy
         float usage = get_usage_for_policy(entry->d_name);  // e.g., "policy0", "policy4"
 
-        int target_freq = calculate_target_frequency(min_freq, max_freq, usage);
+        int target_freq = calculate_target_frequency(min_freq, max_freq, curr_usage);
 
         // Apply to scaling_min_freq and scaling_max_freq
         char path_set_min[128], path_set_max[128];
