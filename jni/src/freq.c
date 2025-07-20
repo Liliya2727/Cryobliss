@@ -136,7 +136,7 @@ void apply_frequency_all(void) {
 
     struct dirent *entry;
     float curr_usage = get_cpu_usage(); // Calculate global CPU usage once
-    ALOGI("CPU usage: %.2f%%", curr_usage);
+    log_zenith(LOG_INFO, "CPU usage: %.2f%%", curr_usage);
 
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "policy", 6) != 0)
@@ -153,7 +153,7 @@ void apply_frequency_all(void) {
         int max_freq = read_int_from_file(max_path);
 
         if (min_freq <= 0 || max_freq <= 0 || min_freq >= max_freq) {
-            ALOGE("Invalid frequency values for %s", entry->d_name);
+            log_zenith(LOG_ERROR, "Invalid frequency values for %s", entry->d_name);
             continue;
         }
 
@@ -163,7 +163,7 @@ void apply_frequency_all(void) {
         snprintf(set_freq_path, sizeof(set_freq_path), "%s/scaling_max_freq", policy_path);
         write_int_to_file(set_freq_path, target_freq);
 
-        ALOGI("%s usage=%.2f%% → freq=%d MHz", entry->d_name, curr_usage, target_freq / 1000);
+        log_zenith(LOG_INFO, "%s usage=%.2f%% → freq=%d MHz", entry->d_name, curr_usage, target_freq);
     }
 
     closedir(dir);
