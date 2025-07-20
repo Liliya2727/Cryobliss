@@ -36,9 +36,20 @@ void log_zenith(LogLevel level, const char* message, ...) {
     vsnprintf(logMesg, sizeof(logMesg), message, args);
     va_end(args);
 
+    // Write to file
     write2file(LOG_FILE, true, true, "%s %s %s: %s\n", timestamp, level_str[level], LOG_TAG, logMesg);
-}
 
+    // Also write to logcat
+    int android_log_level;
+    switch (level) {
+        case LOG_INFO: android_log_level = ANDROID_LOG_INFO; break;
+        case LOG_WARN: android_log_level = ANDROID_LOG_WARN; break;
+        case LOG_ERROR: android_log_level = ANDROID_LOG_ERROR; break;
+        default: android_log_level = ANDROID_LOG_DEBUG; break;
+    }
+
+    __android_log_print(android_log_level, LOG_TAG, "%s", logMesg);
+}
 /***********************************************************************************
  * Function Name      : external_log
  * Inputs             : level - Log level (0-4)

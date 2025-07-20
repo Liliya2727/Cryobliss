@@ -123,7 +123,7 @@ int calculate_target_frequency(float usage) {
  * Description        : apply scaling max and min freq
  ***********************************************************************************/
 
-void apply_frequency_all(int freq) {
+void apply_frequency_all() {
     DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
     if (!dir) return;
 
@@ -133,27 +133,37 @@ void apply_frequency_all(int freq) {
         if (strncmp(entry->d_name, "policy", 6) != 0)
             continue;
 
-        char path_min[128], path_max[128];
-        snprintf(path_min, sizeof(path_min),
+        char path_min_freq[128], path_max_freq[128];
+        snprintf(path_min_freq, sizeof(path_min_freq),
+                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_min_freq", entry->d_name);
+        snprintf(path_max_freq, sizeof(path_max_freq),
+                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_max_freq", entry->d_name);
+
+        int min_freq = read_int_from_file(path_min_freq);
+        int max_freq = read_int_from_file(path_max_freq);
+
+        if (min_freq <= 0 || max_freq <= 0 || max_freq < min_freq)
+            continue;
+
+        // You need to implement this function to get current usage per policy
+        float usage = get_usage_for_policy(entry->d_name);  // e.g., "policy0", "policy4"
+
+        int target_freq;
+        if (usage < 10.0f) target_freq = min_freq;
+        else if (usage > 90.0f) target_freq = max_freq;
+        else target_freq = min_freq + (int)((max_freq - min_freq) * (usage / 100.0f));
+
+        // Apply to scaling_min_freq and scaling_max_freq
+        char path_set_min[128], path_set_max[128];
+        snprintf(path_set_min, sizeof(path_set_min),
                  "/sys/devices/system/cpu/cpufreq/%s/scaling_min_freq", entry->d_name);
-        snprintf(path_max, sizeof(path_max),
+        snprintf(path_set_max, sizeof(path_set_max),
                  "/sys/devices/system/cpu/cpufreq/%s/scaling_max_freq", entry->d_name);
 
-        FILE *fp_min = fopen(path_min, "w");
-        FILE *fp_max = fopen(path_max, "w");
+        write_int_to_file(path_set_min, target_freq);
+        write_int_to_file(path_set_max, target_freq);
 
-        if (fp_min) {
-            fprintf(fp_min, "%d", freq);
-            fclose(fp_min);
-        }
-
-        if (fp_max) {
-            fprintf(fp_max, "%d", freq);
-            fclose(fp_max);
-        }
-
-        // Also log the applied freq for each policy
-        log_zenith(LOG_INFO, "%s: applied freq=%d", entry->d_name, freq);
+        log_zenith(LOG_INFO, "%s usage=%.2f%% → freq=%d MHz", entry->d_name, usage, target_freq);
     }
 
     closedir(dir);

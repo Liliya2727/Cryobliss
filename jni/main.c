@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
     init_global_freq_bounds();
         
 while (1) {
-    sleep(LOOP_INTERVAL);
+    usleep(LOOP_INTERVAL);
 
     // Check if module was updated → exit for safety
     if (access(MODULE_UPDATE, F_OK) == 0) [[clang::unlikely]] {
