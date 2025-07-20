@@ -18,9 +18,6 @@
 
 
             
-char* gamestart = NULL;
-pid_t game_pid = 0;
-
 int main(int argc, char* argv[]) {
     // Handle case when not running on root
     if (getuid() != 0) {
@@ -71,9 +68,7 @@ int main(int argc, char* argv[]) {
     
     // Handle case when module modified by 3rd party
     is_kanged();
-        
-
-    
+            
 
     // Daemonize service
     if (daemon(0, 0)) {
@@ -87,13 +82,10 @@ int main(int argc, char* argv[]) {
 
     // Initialize variables
     bool need_profile_checkup = false;
-    MLBBState mlbb_is_running = MLBB_NOT_RUNNING;
-    ProfileMode cur_mode = PERFCOMMON;
+    
 
     log_zenith(LOG_INFO, "Daemon started as PID %d", getpid());
     notify("Initializing...");
-    run_profiler(PERFCOMMON); // exec perfcommon    
-    static bool did_notify_start = false;
     
         
     while (1) {
@@ -106,73 +98,8 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        // Only fetch gamestart when user not in-game
-        // prevent overhead from dumpsys commands.
-        if (!gamestart) {
-            gamestart = get_gamestart();        
-        } else if (game_pid != 0 && kill(game_pid, 0) == -1) [[clang::unlikely]] {
-            log_zenith(LOG_INFO, "Game %s exited, resetting profile...", gamestart);
-   
-            game_pid = 0;
-            free(gamestart);
-            gamestart = get_gamestart();
-
-            // Force profile recheck to make sure new game session get boosted
-            need_profile_checkup = true;
-        }
-
-        if (gamestart)
-            mlbb_is_running = handle_mlbb(gamestart);
-
-        if (gamestart && get_screenstate() && mlbb_is_running != MLBB_RUN_BG) {
-            // Bail out if we already on performance profile   
-      
-            if (!need_profile_checkup && cur_mode == PERFORMANCE_PROFILE)
-                continue;
-
-            // Get PID and check if the game is "real" running program
-            // Handle weird behavior of MLBB
-            game_pid = (mlbb_is_running == MLBB_RUNNING) ? mlbb_pid : pidof(gamestart);
-            if (game_pid == 0) [[clang::unlikely]] {
-                log_zenith(LOG_ERROR, "Unable to fetch PID of %s", gamestart);
-                free(gamestart);
-                gamestart = NULL;
-                continue;
-            }
-
-            cur_mode = PERFORMANCE_PROFILE;
-            need_profile_checkup = false;            
-            log_zenith(LOG_INFO, "Applying performance profile for %s", gamestart);
-            toast("Applying Performance Profile");
-            run_profiler(PERFORMANCE_PROFILE);
-            set_priority(game_pid); 
-             
-        } else if (get_low_power_state()) {
-            // Bail out if we already on powersave profile
-            if (cur_mode == ECO_MODE)
-                continue;
-
-            cur_mode = ECO_MODE;
-            need_profile_checkup = false;
-            log_zenith(LOG_INFO, "Applying ECO Mode");
-            toast("Applying Eco Mode");
-            run_profiler(ECO_MODE);
-        } else {
-            // Bail out if we already on normal profile
-            if (cur_mode == BALANCED_PROFILE)
-                continue;
-
-            cur_mode = BALANCED_PROFILE;
-            need_profile_checkup = false;
-            log_zenith(LOG_INFO, "Applying Balanced profile");
-            toast("Applying Balanced profile");
-            if (!did_notify_start) {
-               notify("AZenith is running successfully");
-               did_notify_start = true;
-               }
-            run_profiler(BALANCED_PROFILE);
-        }
-    }
+       
+    
 
     return 0;
 }
