@@ -114,14 +114,15 @@ float get_cpu_usage(void) {
  * Description        : Calculate target freq based kn usage
  ***********************************************************************************/
  
-int calculate_target_frequency(float usage) {
-    if (global_min_freq == 0 || global_max_freq == 0) return 0;  // Sanity check
+int calculate_target_frequency(int min_freq, int max_freq, float usage) {
+    if (min_freq <= 0 || max_freq <= 0 || max_freq < min_freq)
+        return 0;
 
-    if (usage < 10.0f) return global_min_freq;
-    if (usage > 90.0f) return global_max_freq;
+    if (usage < 10.0f) return min_freq;
+    if (usage > 90.0f) return max_freq;
 
     float ratio = usage / 100.0f;
-    return global_min_freq + (int)((global_max_freq - global_min_freq) * ratio);
+    return min_freq + (int)((max_freq - min_freq) * ratio);
 }
 
 /***********************************************************************************
@@ -154,10 +155,7 @@ void apply_frequency_all(void) {
         // You need to implement this function to get current usage per policy
         float usage = get_usage_for_policy(entry->d_name);  // e.g., "policy0", "policy4"
 
-        int target_freq;
-        if (usage < 10.0f) target_freq = min_freq;
-        else if (usage > 90.0f) target_freq = max_freq;
-        else target_freq = min_freq + (int)((max_freq - min_freq) * (usage / 100.0f));
+        int target_freq = calculate_target_frequency(min_freq, max_freq, usage);
 
         // Apply to scaling_min_freq and scaling_max_freq
         char path_set_min[128], path_set_max[128];
@@ -230,9 +228,35 @@ void set_all_to_min_freq(void) {
 
 
 float get_usage_for_policy(const char *policy_id) {
-    log_zenith(LOG_INFO, "get_usage_for_policy(%s) called", policy_id);
+    char path[128];
+    snprintf(path, sizeof(path),
+             "/sys/devices/system/cpu/cpufreq/%s/stats/time_in_state", policy_id);
 
-    return 50.0f; 
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0.0f;
+
+    char line[128];
+    unsigned long long total_time = 0, busy_time = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        unsigned long freq = 0;
+        unsigned long long time = 0;
+
+        if (sscanf(line, "%lu %llu", &freq, &time) == 2) {
+            total_time += time;
+            if (freq > 0) busy_time += time;
+        }
+    }
+
+    fclose(fp);
+
+    // Avoid division by zero
+    if (total_time == 0) return 0.0f;
+
+    // Normalize to percentage
+    float usage = (busy_time * 100.0f) / total_time;
+
+    return usage;
 }
 
 int write_int_to_file(const char *path, int value) {
