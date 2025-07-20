@@ -31,6 +31,7 @@
     "xbin:/data/data/com.termux/files/usr/bin"
 
 
+#define IS_AWAKE(state) (strcmp(state, "Awake") == 0 || strcmp(state, "true") == 0)
 // Basic C knowledge: enum starts with 0
 
 typedef enum : char {

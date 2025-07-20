@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
     char* base_name = basename(argv[0]);
     if (strcmp(base_name, "Cryx_log") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "Usage: AZenith_log <TAG> <LEVEL> <MESSAGE>\n");
+            fprintf(stderr, "Usage: Cryx_log <TAG> <LEVEL> <MESSAGE>\n");
             fprintf(stderr, "Levels: 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR, 4=FATAL\n");
             return EXIT_FAILURE;
         }
