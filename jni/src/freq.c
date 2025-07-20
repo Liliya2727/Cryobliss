@@ -135,43 +135,40 @@ void apply_frequency_all(void) {
     if (!dir) return;
 
     struct dirent *entry;
+    float curr_usage = get_cpu_usage(); // Calculate global CPU usage once
+    ALOGI("CPU usage: %.2f%%", curr_usage);
 
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "policy", 6) != 0)
             continue;
 
-        char path_min_freq[128], path_max_freq[128];
-        snprintf(path_min_freq, sizeof(path_min_freq),
-                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_min_freq", entry->d_name);
-        snprintf(path_max_freq, sizeof(path_max_freq),
-                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_max_freq", entry->d_name);
+        char policy_path[128];
+        snprintf(policy_path, sizeof(policy_path), "/sys/devices/system/cpu/cpufreq/%s", entry->d_name);
 
-        int min_freq = read_int_from_file(path_min_freq);
-        int max_freq = read_int_from_file(path_max_freq);
+        char min_path[160], max_path[160];
+        snprintf(min_path, sizeof(min_path), "%s/cpuinfo_min_freq", policy_path);
+        snprintf(max_path, sizeof(max_path), "%s/cpuinfo_max_freq", policy_path);
 
-        if (min_freq <= 0 || max_freq <= 0 || max_freq < min_freq)
+        int min_freq = read_int_from_file(min_path);
+        int max_freq = read_int_from_file(max_path);
+
+        if (min_freq <= 0 || max_freq <= 0 || min_freq >= max_freq) {
+            ALOGE("Invalid frequency values for %s", entry->d_name);
             continue;
-
-        // You need to implement this function to get current usage per policy
-        float curr_usage = get_cpu_usage(); 
+        }
 
         int target_freq = calculate_target_frequency(min_freq, max_freq, curr_usage);
 
-        // Apply to scaling_min_freq and scaling_max_freq
-        char path_set_min[128], path_set_max[128];
-        snprintf(path_set_min, sizeof(path_set_min),
-                 "/sys/devices/system/cpu/cpufreq/%s/scaling_min_freq", entry->d_name);
-        snprintf(path_set_max, sizeof(path_set_max),
-                 "/sys/devices/system/cpu/cpufreq/%s/scaling_max_freq", entry->d_name);
+        char set_freq_path[160];
+        snprintf(set_freq_path, sizeof(set_freq_path), "%s/scaling_max_freq", policy_path);
+        write_int_to_file(set_freq_path, target_freq);
 
-        write_int_to_file(path_set_min, target_freq);
-        write_int_to_file(path_set_max, target_freq);
-
-        log_zenith(LOG_INFO, "%s usage=%.2f%% → freq=%d MHz", entry->d_name, curr_usage, target_freq);
+        ALOGI("%s usage=%.2f%% → freq=%d MHz", entry->d_name, curr_usage, target_freq / 1000);
     }
 
     closedir(dir);
 }
+
 /***********************************************************************************
  * Function Name      : check screenon
  * Description        : check screen state
