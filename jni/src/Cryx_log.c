@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <AZenith.h>
+#include <Cryx.h>
 
 char* custom_log_tag = NULL;
 const char* level_str[] = {"D", "I", "W", "E", "F"};
@@ -38,33 +38,7 @@ void log_zenith(LogLevel level, const char* message, ...) {
 
     write2file(LOG_FILE, true, true, "%s %s %s: %s\n", timestamp, level_str[level], LOG_TAG, logMesg);
 }
-/***********************************************************************************
- * Function Name      : log_Preload
- * Inputs             : level - Log level
- *                      message (const char *) - message to log
- *                      variadic arguments - additional arguments for message
- * Returns            : None
- * Description        : print and logs a formatted message with a timestamp
- *                      to a log file.
- ***********************************************************************************/
-void log_preload(LogLevel level, const char* message, ...) {
-FILE* fp = fopen(LOGGER, "r");
-if (fp) {
-     char val = fgetc(fp);
-     fclose(fp);
-        
-if (val == '1') {
-    char* timestamp = timern();
-    char logMesg[MAX_OUTPUT_LENGTH];
-    va_list args;
-    va_start(args, message);
-    vsnprintf(logMesg, sizeof(logMesg), message, args);
-    va_end(args);
 
-    write2file(LOG_FILE_PRELOAD, true, true, "%s %s %s: %s\n", timestamp, level_str[level], LOG_TAG, logMesg);
-}
-}
-}
 /***********************************************************************************
  * Function Name      : external_log
  * Inputs             : level - Log level (0-4)

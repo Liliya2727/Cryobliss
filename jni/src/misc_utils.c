@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <AZenith.h>
+#include <Cryx.h>
 
 /***********************************************************************************
  * Function Name      : trim_newline
@@ -34,25 +34,6 @@
     return string;
 }
 
-/***********************************************************************************
- * Function Name      : notify
- * Inputs             : message (char *) - Message to display
- * Returns            : None
- * Description        : Push a notification.
- ***********************************************************************************/
-void notify(const char* message) {
-    int exit =
-        systemv("su -lp 2000 -c \"/system/bin/cmd notification post "
-                "-t '%s' "
-                "-i file:///data/local/tmp/AZenith_icon.png "
-                "-I file:///data/local/tmp/AZenith_icon.png "
-                "'AZenith' '%s'\" >/dev/null",
-                NOTIFY_TITLE, message);
-
-    if (exit != 0) [[clang::unlikely]] {
-        log_zenith(LOG_ERROR, "Unable to post push notification, message: %s", message);
-    }
-}
 
 /***********************************************************************************
  * Function Name      : timern
@@ -109,23 +90,6 @@ char* timern(void) {
     _exit(EXIT_SUCCESS);
 }
 
-/***********************************************************************************
- * Function Name      : toast
- * Inputs             : message (const char *) - Message to display
- * Returns            : None
- * Description        : Display a toast notification using bellavita.toast app.
- ***********************************************************************************/
-void toast(const char* message) {
-    int exit = systemv(
-        "su -lp 2000 -c \"/system/bin/am start -a android.intent.action.MAIN "
-        "-e toasttext '%s' -n bellavita.toast/.MainActivity >/dev/null 2>&1\"",
-        message
-    );
-
-    if (exit != 0) [[clang::unlikely]] {
-        log_zenith(LOG_WARN, "Unable to show toast message: %s", message);
-    }
-}
 
 /***********************************************************************************
  * Function Name      : is_kanged
@@ -134,11 +98,11 @@ void toast(const char* message) {
  * Description        : Checks if the module renamed/modified by 3rd party.
  ***********************************************************************************/
 void is_kanged(void) {
-    if (systemv("grep -q '^name=AZenith火$' %s", MODULE_PROP) != 0) [[clang::unlikely]] {
+    if (systemv("grep -q '^name=Cryobliss Optimization$' %s", MODULE_PROP) != 0) [[clang::unlikely]] {
         goto doorprize;
     }
 
-    if (systemv("grep -q '^author=@Zexshia X @kanaochar$' %s", MODULE_PROP) != 0) [[clang::unlikely]] {
+    if (systemv("grep -q '^author=Zexshia$' %s", MODULE_PROP) != 0) [[clang::unlikely]] {
         goto doorprize;
     }
 
@@ -172,21 +136,4 @@ bool return_false(void) {
     return false;
 }
 
-/***********************************************************************************
- * Function Name      : cleanup
- * Inputs             : None
- * Returns            : None (exits the program)
- * Description        : Terminates vmt processes and exits cleanly with logging.
- ***********************************************************************************/
-void cleanup_vmt(void) {
-    log_zenith(LOG_INFO, "Cleaning up vmt Process...");
-    systemv("pkill -x vmt");
-    systemv("pkill -x vmt2");    
-}
-
-void cleanup(void) {
-    log_zenith(LOG_INFO, "Stop Preloading, Killing vmt process...");
-    systemv("pkill -x vmt");
-    systemv("pkill -x vmt2");    
-}
 
