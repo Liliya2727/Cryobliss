@@ -17,8 +17,6 @@
 #include <Cryx.h>
 #include <libgen.h>
 #include <math.h>
-int global_min_freq = 0;
-int global_max_freq = 0;
 
             
 int main(int argc, char* argv[]) {
