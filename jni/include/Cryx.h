@@ -16,7 +16,7 @@
 #define CPU_STAT_PATH "/proc/stat"
 #define MTK_BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/brightness"
 
-#define LOOP_INTERVAL 15
+#define LOOP_INTERVAL 1
 #define MAX_DATA_LENGTH 1024
 #define MAX_COMMAND_LENGTH 600
 #define MAX_OUTPUT_LENGTH 256

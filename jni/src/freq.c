@@ -75,7 +75,45 @@ void init_global_freq_bounds(void) {
 
     closedir(dir);
 }
+void log_policy_freqs(void) {
+    char path[64];
+    char buf[32];
 
+    for (int i = 0; i < 16; i++) {  // max 16 clusters
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpufreq/policy%d", i);
+        if (access(path, F_OK) != 0) {
+            break;
+        }
+
+        char min_path[128], max_path[128];
+        snprintf(min_path, sizeof(min_path), "%s/cpuinfo_min_freq", path);
+        snprintf(max_path, sizeof(max_path), "%s/cpuinfo_max_freq", path);
+
+        int min_freq = -1, max_freq = -1;
+
+        FILE *fmin = fopen(min_path, "r");
+        if (fmin) {
+            if (fgets(buf, sizeof(buf), fmin)) {
+                min_freq = atoi(buf);
+            }
+            fclose(fmin);
+        }
+
+        FILE *fmax = fopen(max_path, "r");
+        if (fmax) {
+            if (fgets(buf, sizeof(buf), fmax)) {
+                max_freq = atoi(buf);
+            }
+            fclose(fmax);
+        }
+
+        if (min_freq != -1 && max_freq != -1) {
+            log_zenith(LOG_INFO, "Policy%d: min=%d max=%d", i, min_freq, max_freq);
+        } else {
+            log_zenith(LOG_WARN, "Policy%d: Failed to read min/max freq", i);
+        }
+    }
+}
 /***********************************************************************************
  * Function Name      : cpuusage
  * Description        : Check cpu usage
@@ -146,7 +184,22 @@ void apply_frequency_all(int freq) {
         }
     }
 }
+void log_current_policy_freqs(void) {
+    char path[64], buf[32];
+    for (int i = 0; i < 16; i++) {
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq", i);
+        if (access(path, F_OK) != 0) {
+            break;
+        }
 
+        FILE *f = fopen(path, "r");
+        if (f && fgets(buf, sizeof(buf), f)) {
+            int freq = atoi(buf);
+            log_zenith(LOG_DEBUG, "Policy%d current freq: %d GHz", i, freq);
+            fclose(f);
+        }
+    }
+}
 /***********************************************************************************
  * Function Name      : check screenon
  * Description        : check screen state

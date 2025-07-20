@@ -89,6 +89,7 @@ int main(int argc, char* argv[]) {
     
     init_global_freq_bounds();
     log_zenith(LOG_INFO, "Detected global min=%d max=%d", global_min_freq, global_max_freq);
+log_policy_freqs();
         
 
 while (1) {
@@ -120,13 +121,14 @@ while (1) {
 
     // STEP 2.1: Is target frequency same as current?
     if (target_freq == prev_freq) {
-        log_zenith(LOG_DEBUG, "Frequency unchanged: %d kHz", target_freq);
+        log_zenith(LOG_DEBUG, "Frequency unchanged: %d GHz", target_freq);
         continue;
     }
 
     // STEP 2.2: Apply new frequency
     apply_frequency_all(target_freq);
     log_zenith(LOG_INFO, "CPU usage: %.2f%%, Applied freq: %d kHz", curr_usage, target_freq);
+    log_current_policy_freqs();
     prev_freq = target_freq;
 
     // STEP 3: Screen state check
