@@ -123,7 +123,7 @@ int calculate_target_frequency(float usage) {
  * Description        : apply scaling max and min freq
  ***********************************************************************************/
 
-void apply_frequency_all(void) {
+void apply_frequency_all(int target_freq) {
     DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
     if (!dir) return;
 
