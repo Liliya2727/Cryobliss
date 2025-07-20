@@ -118,8 +118,8 @@ int calculate_target_frequency(int min_freq, int max_freq, float curr_usage) {
     if (min_freq <= 0 || max_freq <= 0 || max_freq < min_freq)
         return 0;
 
-    if (usage < 10.0f) return min_freq;
-    if (usage > 90.0f) return max_freq;
+    if (curr_usage < 10.0f) return min_freq;
+    if (curr_usage > 90.0f) return max_freq;
 
     float ratio = usage / 100.0f;
     return min_freq + (int)((max_freq - min_freq) * ratio);
