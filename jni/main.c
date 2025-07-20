@@ -118,19 +118,19 @@ while (1) {
 
     // STEP 2.1: Is target frequency same as current?
     if (target_freq == prev_freq) {
-        log_zenith(LOG_DEBUG, "Frequency unchanged: %d MHz", target_freq / 1000.0);
+        log_zenith(LOG_DEBUG, "Frequency unchanged, keep going);
         continue;
     }
 
-    // STEP 2.2: Apply new frequency
+    // STEP 2.2: Apply new frequency    
+    log_zenith(LOG_INFO, "CPU usage: %.2f%%", curr_usage);
     apply_frequency_all(target_freq);
-    log_zenith(LOG_INFO, "CPU usage: %.2f%%, Applied freq: %d MHz", curr_usage, target_freq / 1000.0);
     prev_freq = target_freq;
 
     // STEP 3: Screen state check
     if (!is_screen_on()) {
         if (!screen_off) {
-            log_zenith(LOG_INFO, "Screen off detected, setting lowest freq");
+            log_zenith(LOG_INFO, "Screen off, setting lowest freq");
             set_all_to_min_freq();
             screen_off = 1;
         }
@@ -140,7 +140,7 @@ while (1) {
             sleep(SLEEP_WHEN_OFF);
         }
 
-        log_zenith(LOG_INFO, "Screen on detected, resuming loop");
+        log_zenith(LOG_INFO, "Screen on, resuming loop");
         screen_off = 0;
         prev_freq = -1;
         prev_usage = 0.0f;

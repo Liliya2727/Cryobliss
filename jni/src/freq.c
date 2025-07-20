@@ -73,12 +73,6 @@ void init_global_freq_bounds(void) {
 
     closedir(dir);
 
-    // Optional: log the final global bounds
-    if (global_min_freq != INT_MAX && global_max_freq != -1) {
-        log_zenith(LOG_INFO, "Global bounds: min=%d max=%d", global_min_freq / 1000.0, global_max_freq / 1000.0);
-    } else {
-        log_zenith(LOG_WARN, "Failed to determine global frequency bounds");
-    }
 }
 /***********************************************************************************
  * Function Name      : cpuusage
@@ -140,7 +134,6 @@ void apply_frequency_all(int freq) {
             continue;
 
         char path_min[128], path_max[128];
-
         snprintf(path_min, sizeof(path_min),
                  "/sys/devices/system/cpu/cpufreq/%s/scaling_min_freq", entry->d_name);
         snprintf(path_max, sizeof(path_max),
@@ -158,6 +151,9 @@ void apply_frequency_all(int freq) {
             fprintf(fp_max, "%d", freq);
             fclose(fp_max);
         }
+
+        // Also log the applied freq for each policy
+        log_zenith(LOG_INFO, "%s: applied freq=%d", entry->d_name, freq);
     }
 
     closedir(dir);
