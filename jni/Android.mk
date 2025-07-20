@@ -18,3 +18,4 @@ LOCAL_CFLAGS := -DNDEBUG -Wall -Wextra -Werror \
 
 LOCAL_LDFLAGS := -flto
 include $(BUILD_EXECUTABLE)
+LOCAL_LDLIBS += -llog
