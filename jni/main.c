@@ -114,7 +114,7 @@ while (1) {
     prev_usage = curr_usage;
 
     // STEP 2: Calculate target frequency
-    int target_freq = calculate_target_frequency(curr_usage);
+    int target_freq = calculate_target_frequency(min_freq, max_freq, usage);
 
     // STEP 2.1: Is target frequency same as current?
     if (target_freq == prev_freq) {
