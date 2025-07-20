@@ -83,21 +83,15 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
 
-    // Initialize variables
-    bool need_profile_checkup = false;
-    
 
     log_zenith(LOG_INFO, "Daemon started as PID %d", getpid());
-    notify("Initializing...");
     
-        
     while (1) {
         sleep(LOOP_INTERVAL);
 
         // Handle case when module gets updated
         if (access(MODULE_UPDATE, F_OK) == 0) [[clang::unlikely]] {
             log_zenith(LOG_INFO, "Module update detected, exiting.");
-            notify("Please reboot your device to complete module update.");
             break;
         }
 
