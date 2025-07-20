@@ -35,10 +35,7 @@ jobs:
       with:
         ndk-version: r28b
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v2.0.2
-
-    - name: Build AZenith JNI
+    - name: Build Cryobliss Main Program
       run: ndk-build
       
 
@@ -46,7 +43,7 @@ jobs:
       id: compileZip
       run: bash .github/scripts/compile_zip.sh
 
-    - name: Unzip AZenith Package
+    - name: Unzip Package
       run: |
         unzip ${{ steps.compileZip.outputs.zipName }} -d extracted
 
