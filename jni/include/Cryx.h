@@ -21,6 +21,7 @@
 #define MAX_COMMAND_LENGTH 600
 #define MAX_OUTPUT_LENGTH 256
 #define MAX_PATH_LENGTH 256
+#define SLEEP_WHEN_OFF 3  
 
 #define LOG_TAG "Cryx"
 
@@ -56,6 +57,7 @@ void apply_frequency_all(int freq);
 int is_screen_on(void);
 void set_all_to_min_freq(void);
 extern int global_min_freq;
+void init_global_freq_bounds(void);
 extern int global_max_freq;
 
 /*
@@ -66,8 +68,6 @@ extern int global_max_freq;
 
 void sighandler(const int signal);
 char* trim_newline(char* string);
-void notify(const char* message);
-void toast(const char* message); 
 void is_kanged(void);
 char* timern(void);
 bool return_true(void);

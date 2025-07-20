@@ -88,7 +88,7 @@ int main(int argc, char* argv[]) {
     log_zenith(LOG_INFO, "Daemon started as PID %d", getpid());
     
     if (!init_global_freq_bounds()) {
-    log_zenith(LOG_ERR, "Failed to initialize global frequency bounds");
+    log_zenith(LOG_ERROR, "Failed to initialize global frequency bounds");
     return 1;
     }
     init_global_freq_bounds();
