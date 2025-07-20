@@ -18,6 +18,12 @@
 #include <Cryx.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -225,6 +231,45 @@ void set_all_to_min_freq(void) {
 
 int get_usage_for_policy(int policy_id) {
     // You can expand this with actual /proc/stat reading later.
-    log_zenith("get_usage_for_policy(%d) called", policy_id);
+    log_zenith(LOG_INFO, "get_usage_for_policy(%s) called", policy);
     return 0;
+}
+
+int write_int_to_file(const char *path, int value) {
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        log_zenith(LOG_ERROR, "Failed to open %s: %s", path, strerror(errno));
+        return -1;
+    }
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d", value);
+    if (write(fd, buf, strlen(buf)) < 0) {
+        log_zenith(LOG_ERROR, "Failed to write to %s: %s", path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
+int read_int_from_file(const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        log_zenith(LOG_ERROR, "Failed to open %s: %s", path, strerror(errno));
+        return -1;
+    }
+
+    char buf[32];
+    ssize_t len = read(fd, buf, sizeof(buf) - 1);
+    if (len <= 0) {
+        log_zenith(LOG_ERROR, "Failed to read from %s: %s", path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    buf[len] = '\0';
+    close(fd);
+    return atoi(buf);
 }
