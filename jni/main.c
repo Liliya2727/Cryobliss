@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
 
     // Expose logging interface for other modules
     char* base_name = basename(argv[0]);
-    if (strcmp(base_name, "AZenith_log") == 0) {
+    if (strcmp(base_name, "Cryx_log") == 0) {
         if (argc < 3) {
             fprintf(stderr, "Usage: AZenith_log <TAG> <LEVEL> <MESSAGE>\n");
             fprintf(stderr, "Levels: 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR, 4=FATAL\n");
@@ -68,7 +68,9 @@ int main(int argc, char* argv[]) {
     
     // Handle case when module modified by 3rd party
     is_kanged();
-            
+        
+
+    
 
     // Daemonize service
     if (daemon(0, 0)) {

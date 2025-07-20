@@ -1,5 +1,5 @@
-#ifndef AZENITH_H
-#define AZENITH_H
+#ifndef CRYX_H
+#define CRYX_H
 
 #include <ctype.h>
 #include <dirent.h>
@@ -68,8 +68,7 @@ int systemv(const char* format, ...);
 int create_lock_file(void);
 int write2file(const char* filename, const bool append, const bool use_flock, const char* data, ...);
 
-// system
-void log_preload(LogLevel level, const char *message, ...);
+
 void log_zenith(LogLevel level, const char* message, ...);
 void external_log(LogLevel level, const char* tag, const char* message);
 
