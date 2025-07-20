@@ -127,7 +127,7 @@ while (1) {
 
     // STEP 2.2: Apply new frequency    
     log_zenith(LOG_INFO, "CPU usage: %.2f%%", curr_usage);
-    apply_frequency_all();
+    apply_frequency_all(curr_usage);
     prev_freq = target_freq;
 
     // STEP 3: Screen state check

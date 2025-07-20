@@ -130,13 +130,12 @@ int calculate_target_frequency(int min_freq, int max_freq, float curr_usage) {
  * Description        : apply scaling max and min freq
  ***********************************************************************************/
 
-void apply_frequency_all(void) {
+void apply_frequency_all(float curr_usage) {
     DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
-    if (!dir) return;
+    if (!dir)
+        return;
 
     struct dirent *entry;
-    float curr_usage = get_cpu_usage(); // Calculate global CPU usage once
-    log_zenith(LOG_INFO, "CPU usage: %.2f%%", curr_usage);
 
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "policy", 6) != 0)
