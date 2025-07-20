@@ -188,6 +188,36 @@ int is_screen_on(void) {
  * Function Name      : trim_newline
  * Description        : Set all cpu to minfreq
  ***********************************************************************************/
+ 
+void apply_min_frequency_all(void) {
+    DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "policy", 6) != 0)
+            continue;
+
+        char path_min[128], path_set_min[128], path_set_max[128];
+        snprintf(path_min, sizeof(path_min),
+                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_min_freq", entry->d_name);
+        int min_freq = read_int_from_file(path_min);
+        if (min_freq <= 0) continue;
+
+        snprintf(path_set_min, sizeof(path_set_min),
+                 "/sys/devices/system/cpu/cpufreq/%s/scaling_min_freq", entry->d_name);
+        snprintf(path_set_max, sizeof(path_set_max),
+                 "/sys/devices/system/cpu/cpufreq/%s/scaling_max_freq", entry->d_name);
+
+        write_int_to_file(path_set_min, min_freq);
+        write_int_to_file(path_set_max, min_freq);
+
+        log_zenith(LOG_INFO, "%s forced to min freq = %d MHz", entry->d_name, min_freq);
+    }
+
+    closedir(dir);
+}
+
 void set_all_to_min_freq(void) {
-    apply_frequency_all(global_min_freq);
+    apply_min_frequency_all();
 }
