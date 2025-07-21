@@ -60,7 +60,6 @@ void init_global_freq_bounds(void);
 extern int global_max_freq;
 int read_int_from_file(const char *path);
 void apply_frequency_all(float curr_usage);
-int write_int_to_file(const char *path, int value);
 
 /*
  * If you're here for function comments, you
