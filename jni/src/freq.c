@@ -130,7 +130,7 @@ int calculate_target_frequency(int min_freq, int max_freq, float curr_usage) {
  * Description        : apply scaling max and min freq
  ***********************************************************************************/
 
-void apply_min_frequency_all(float curr_usage) {
+void apply_frequency_all(float curr_usage) {
     DIR *dir = opendir("/sys/devices/system/cpu/cpufreq");
     if (!dir) {
         log_zenith(LOG_ERROR, "Failed to open cpufreq directory");
@@ -138,32 +138,39 @@ void apply_min_frequency_all(float curr_usage) {
     }
 
     struct dirent *entry;
+
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "policy", 6) != 0)
             continue;
 
-        char path_min[128];
-        snprintf(path_min, sizeof(path_min),
-                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_min_freq", entry->d_name);
-        int min_freq = read_int_from_file(path_min);
-        if (min_freq <= 0)
-            continue;
+        char policy_path[128];
+        snprintf(policy_path, sizeof(policy_path), "/sys/devices/system/cpu/cpufreq/%s", entry->d_name);
 
-        // Use systemv with redirection via `tee` (which works inside sh -c)
-        char set_min_cmd[256], set_max_cmd[256];
-        snprintf(set_min_cmd, sizeof(set_min_cmd),
-                 "echo %d | tee /sys/devices/system/cpu/cpufreq/%s/scaling_min_freq > /dev/null",
-                 min_freq, entry->d_name);
-        snprintf(set_max_cmd, sizeof(set_max_cmd),
-                 "echo %d | tee /sys/devices/system/cpu/cpufreq/%s/scaling_max_freq > /dev/null",
-                 min_freq, entry->d_name);
+        char min_path[160], max_path[160];
+        snprintf(min_path, sizeof(min_path), "%s/cpuinfo_min_freq", policy_path);
+        snprintf(max_path, sizeof(max_path), "%s/cpuinfo_max_freq", policy_path);
 
-        if (systemv("%s", set_min_cmd) != 0 || systemv("%s", set_max_cmd) != 0) {
-            log_zenith(LOG_ERROR, "Failed to apply min freq to %s", entry->d_name);
+        int min_freq = read_int_from_file(min_path);
+        int max_freq = read_int_from_file(max_path);
+
+        if (min_freq <= 0 || max_freq <= 0 || min_freq >= max_freq) {
+            log_zenith(LOG_ERROR, "Invalid frequency values for %s", entry->d_name);
             continue;
         }
 
-        log_zenith(LOG_INFO, "%s forced to min freq = %d kHz", entry->d_name, min_freq);
+        int target_freq = calculate_target_frequency(min_freq, max_freq, curr_usage);
+
+        char set_cmd[256];
+        snprintf(set_cmd, sizeof(set_cmd),
+                 "echo %d | tee /sys/devices/system/cpu/cpufreq/%s/scaling_max_freq > /dev/null",
+                 target_freq, entry->d_name);
+
+        if (systemv("%s", set_cmd) != 0) {
+            log_zenith(LOG_ERROR, "Failed to apply frequency to %s", entry->d_name);
+            continue;
+        }
+
+        log_zenith(LOG_INFO, "%s usage=%.2f%% → freq=%d mHz", entry->d_name, curr_usage, target_freq);
     }
 
     closedir(dir);
@@ -222,7 +229,7 @@ void apply_min_frequency_all(void) {
             continue;
         }
 
-        log_zenith(LOG_INFO, "%s forced to min freq = %d kHz", entry->d_name, min_freq);
+        log_zenith(LOG_INFO, "%s forced to min freq = %d mHz", entry->d_name, min_freq);
     }
 
     closedir(dir);
