@@ -31,6 +31,12 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list includes "tools", which no longer
+          # exists in the SDK repository and makes sdkmanager exit non-zero.
+          # Only install platform-tools; AGP auto-downloads the rest (licenses
+          # are accepted by this action).
+          packages: "platform-tools"
 
       - name: Set up NDK
         id: setup-ndk
