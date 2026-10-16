@@ -1,0 +1,62 @@
+#!/system/bin/sh
+
+# Wait for boot completion
+while [ -z "$(getprop sys.boot_completed)" ]; do
+    sleep 10
+done
+
+MODDIR=${0%/*}
+
+# Erase STATE so the app resets each state after reboot
+sed -i 's/^STATE.*/STATE/' /data/ProjectSuisei/raco.txt
+
+/system/bin/linker64 $MODDIR/CoreSys/raco_service $MODDIR &
+
+# Execute Ayunda Rusdi (Screen Modifiers) if configured
+AYUNDA_RUSDI=$(grep '^AYUNDA_RUSDI ' /data/ProjectSuisei/raco.txt | awk '{print $2}')
+if [ "$AYUNDA_RUSDI" = "1" ]; then
+    sh "/data/ProjectSuisei/AyundaRusdi.sh" &
+fi
+
+# RSWAP Boot Initialization
+RSWAP_ENABLED=$(grep '^RSWAP ' /data/ProjectSuisei/raco.txt | awk '{print $2}' | tr -d '\r')
+if [ "$RSWAP_ENABLED" = "1" ]; then
+    if [ ! -f /data/ProjectSuisei/RSWAP ]; then
+        RSWAP_SIZE=$(grep '^RSWAP_SIZE ' /data/ProjectSuisei/raco.txt | awk '{print $2}' | tr -d '\r')
+        if [ -z "$RSWAP_SIZE" ]; then RSWAP_SIZE="4"; fi
+        fallocate -l ${RSWAP_SIZE}G /data/ProjectSuisei/RSWAP
+    fi
+    if [ -f /data/ProjectSuisei/RSWAP ]; then
+        chmod 0600 /data/ProjectSuisei/RSWAP
+        mkswap /data/ProjectSuisei/RSWAP
+        /system/bin/linker64 $MODDIR/Compiled/rswap on
+        echo 100 > /proc/sys/vm/swappiness
+        echo $(( $(cat /proc/sys/vm/min_free_kbytes) * 12 / 10 )) > /proc/sys/vm/min_free_kbytes
+    fi
+    # Clean up ghost RSWAP track files from before reboot
+    rm -f /data/ProjectSuisei/RSWAPTrack/rswap_stop_*
+fi
+
+# Wait briefly to ensure services are started
+sleep 2
+
+# Prime the Kotlin service so it isn't in a stopped state
+# We also whitelist it in deviceidle so it can start background services silently without persistent notifications!
+su -c "dumpsys deviceidle whitelist +zx.project.suisei >/dev/null 2>&1"
+su -c "am startservice zx.project.suisei/.GameAssistantService >/dev/null 2>&1"
+
+# Send Startup Notification
+SILENT_NOTIF=$(grep '^SILENT_NOTIF ' /data/ProjectSuisei/raco.txt | awk '{print $2}')
+if [ "$SILENT_NOTIF" = "0" ]; then
+    LEGACY_NOTIF=$(grep '^LEGACY_NOTIF ' /data/ProjectSuisei/raco.txt | awk '{print $2}')
+    if [ "$LEGACY_NOTIF" = "1" ]; then
+        su -lp 2000 -c "cmd notification post -S bigtext -t 'Project Suisei' 'TagSuisei' 'Project Suisei - オンライン'" &
+    else
+        su -lp 2000 -c "cmd notification post -S bigtext -t 'Project Suisei' -i file:///data/local/tmp/logo.png -I file:///data/local/tmp/logo.png 'TagSuisei' 'Project Suisei - オンライン'" &
+    fi
+fi
+# Start the Game Watcher Daemon
+GAME_ASSISTANT=$(grep '^GAME_ASSISTANT ' /data/ProjectSuisei/raco.txt | awk '{print $2}')
+if [ "$GAME_ASSISTANT" = "1" ]; then
+    su -c "$MODDIR/CoreSys/SuiseiGameAssistantService" &
+fi

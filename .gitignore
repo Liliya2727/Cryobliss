@@ -1,0 +1,14 @@
+megumi.sh
+Build/
+Modules/ProjectSuisei.apk
+*.bkp
+*.dtmp
+*.jks
+*.apk
+*.dm
+Designs/Exported
+Modules/Compiled/*
+!Modules/Compiled/.gitkeep
+Modules/CoreSys/*
+!Modules/CoreSys/.gitkeepGenSha.sh
+Modules/ShaList.txt

@@ -1,0 +1,206 @@
+package zx.project.suisei
+
+import androidx.compose.ui.draw.alpha
+
+import zx.project.suisei.R
+import androidx.compose.ui.res.stringResource
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AboutScreen(onBack: () -> Unit) {
+    var deviceModel by remember { mutableStateOf("") }
+    var cpuInfo by remember { mutableStateOf("") }
+    var ramInfo by remember { mutableStateOf("") }
+    var storageInfo by remember { mutableStateOf("") }
+    var batteryInfo by remember { mutableStateOf("") }
+    var isLoaded by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    val credits = listOf(
+        "Rem01 Gaming", "MiAzami", "Kazuyoo", "RiProG",
+        "HoyoSlave", "Koneko_dev", "Not_ValentineSTCV",
+        "Andreyka4_45", "Zexshia", "kaminarich",
+        "fuckyoustan", "Xyanz_25", "hirauki", "KanaDev_IS",
+        stringResource(R.string.credits_11)
+    )
+
+    LaunchedEffect(Unit) {
+        coroutineScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val script = """
+                        echo "MODEL=$(getprop ro.product.model)"
+                        echo "PLATFORM=$(getprop ro.board.platform)"
+                        echo "HW=$(getprop ro.hardware)"
+                        echo "CPU=$(cat /proc/cpuinfo | grep Hardware | cut -d: -f2)"
+                        echo "FREQ=$(cat /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq | sort -nr | head -n 1)"
+                        echo "RAM=$(cat /proc/meminfo | grep MemTotal | awk '{print ${'$'}2}')"
+                        echo "STORAGE=$(df /data | tail -n 1 | awk '{print ${'$'}2}')"
+                        echo "BATTERY=$(cat /sys/class/power_supply/battery/charge_full_design 2>/dev/null)"
+                    """.trimIndent()
+                    
+                    val process = Runtime.getRuntime().exec(arrayOf("su", "-c", script))
+                    val lines = BufferedReader(InputStreamReader(process.inputStream)).readLines()
+                    
+                    val data = mutableMapOf<String, String>()
+                    lines.forEach { line ->
+                        val parts = line.split("=", limit = 2)
+                        if (parts.size == 2) data[parts[0]] = parts[1].trim()
+                    }
+                    
+                    deviceModel = data["MODEL"] ?: "Unknown Device"
+                    
+                    var cpuName = data["PLATFORM"] ?: ""
+                    if (cpuName.isEmpty() || cpuName.equals("unknown", ignoreCase = true)) {
+                        cpuName = data["HW"] ?: ""
+                    }
+                    if (cpuName.isEmpty() || cpuName.equals("unknown", ignoreCase = true)) {
+                        cpuName = data["CPU"] ?: "Unknown CPU"
+                    }
+                    
+                    val cpuFreqStr = data["FREQ"] ?: ""
+                    cpuInfo = if (cpuFreqStr.isNotEmpty() && cpuFreqStr.toLongOrNull() != null) {
+                        val freqGhz = cpuFreqStr.toLong() / 1000000.0
+                        String.format("%.2fGHz %s", freqGhz, cpuName)
+                    } else {
+                        cpuName
+                    }
+
+                    val ramKbStr = data["RAM"] ?: ""
+                    if (ramKbStr.isNotEmpty() && ramKbStr.toLongOrNull() != null) {
+                        val ramGb = Math.ceil(ramKbStr.toLong() / (1024.0 * 1024.0)).toLong()
+                        ramInfo = "$ramGb GB"
+                    }
+
+                    val storageKbStr = data["STORAGE"] ?: ""
+                    if (storageKbStr.isNotEmpty() && storageKbStr.toLongOrNull() != null) {
+                        val storageGb = storageKbStr.toLong() / (1024.0 * 1024.0)
+                        storageInfo = when {
+                            storageGb > 500 -> "1 TB"
+                            storageGb > 240 -> "512 GB"
+                            storageGb > 200 -> "256 GB"
+                            storageGb > 100 -> "128 GB"
+                            storageGb > 50 -> "64 GB"
+                            else -> "${Math.round(storageGb)} GB"
+                        }
+                    }
+
+                    val batteryUahStr = data["BATTERY"] ?: ""
+                    if (batteryUahStr.isNotEmpty() && batteryUahStr.toLongOrNull() != null) {
+                        var mah = Math.round(batteryUahStr.toLong() / 1000.0)
+                        if (mah in 1..999) mah *= 10
+                        batteryInfo = "$mah mAh"
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            } finally {
+                isLoaded = true
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.about)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    titleContentColor = MaterialTheme.colorScheme.primary,
+                    navigationIconContentColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        },
+        containerColor = Color.Transparent
+    ) { padding ->
+        val alpha by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = if (!isLoaded) 0f else 1f,
+            animationSpec = androidx.compose.animation.core.tween(150), label = ""
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 24.dp)
+                .alpha(alpha)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
+                    DeviceInfoRow(deviceModel, stringResource(R.string.device_name))
+                    DeviceInfoRow(cpuInfo, stringResource(R.string.processor))
+                    DeviceInfoRow(ramInfo, stringResource(R.string.ram))
+                    DeviceInfoRow(storageInfo, stringResource(R.string.phone_storage))
+                    DeviceInfoRow(batteryInfo, stringResource(R.string.battery_capacity))
+                }
+
+                Spacer(modifier = Modifier.height(40.dp))
+                Text(
+                    stringResource(R.string.about_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(15.dp))
+                
+                credits.forEach { credit ->
+                    Text("• $credit", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 3.dp), color = MaterialTheme.colorScheme.onSurface)
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+                Text(
+                    stringResource(R.string.about_note),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                Text(stringResource(R.string.about_quote),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+    }
+}
+
+@Composable
+fun DeviceInfoRow(value: String, label: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 8.dp)
+    ) {
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+    }
+}

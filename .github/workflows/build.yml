@@ -1,55 +1,62 @@
-name: Cryobliss
+name: Build
 
 on:
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/build.yml'
-      - '.github/scripts/**'
-      - 'jni/**'
-      - 'mainfiles/**'      
-      - 'version'
+    branches: [main]
+  pull_request:
 
-# Allow only one concurrent build workflows
 concurrency:
-  group: build
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Flashable Zip
+    name: Build module + app
     runs-on: ubuntu-latest
+
+    env:
+      # Never try to flash a device or post to Telegram from CI
+      FLASHTODEVICE: "0"
+      SENDTOTELEGRAM: "0"
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4.2.2
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: NDK Setup
-      uses: nttld/setup-ndk@v1.5.0
-      with:
-        ndk-version: r28b
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-    - name: Build Cryobliss Main Program
-      run: ndk-build
-      
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-    - name: Compile Flashable Zip
-      id: compileZip
-      run: bash .github/scripts/compile_zip.sh
+      - name: Set up NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          local-cache: true
 
-    - name: Unzip Package
-      run: |
-        unzip ${{ steps.compileZip.outputs.zipName }} -d extracted
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-    - name: Upload Build Artifact
-      uses: actions/upload-artifact@v4.6.2
-      with:
-        name: ${{ steps.compileZip.outputs.zipName }}
-        path: extracted/**
-    
+      - name: Build
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: bash build.sh
+
+      - name: Upload module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProjectSuisei-module-${{ github.sha }}
+          path: Build/*.zip
+          if-no-files-found: error
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProjectSuisei-apk-${{ github.sha }}
+          path: Modules/ProjectSuisei.apk
+          if-no-files-found: error

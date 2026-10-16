@@ -1,0 +1,1035 @@
+/*
+Project Suisei - Performance Module
+Copyright (C) 2026 Kanagawa Yamada 
+ */
+
+#include "raco.h"
+
+// ==============================
+// MEDIATEK DEVICES
+// ==============================
+
+void set_gpu_governor(const char *target, const char *gov) {
+    DIR *dir;
+    struct dirent *ent;
+    if ((dir = opendir("/sys/class/devfreq")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, target)) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/class/devfreq/%s/governor", ent->d_name);
+                rawrite(gov, path);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+void mtk_mali_devfreq(const char *mode) {
+    DIR *dir = opendir("/sys/class/devfreq");
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, "mali") != NULL) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
+                if (strcmp(mode, "max") == 0) devfreq_max(path);
+                else if (strcmp(mode, "min") == 0) devfreq_min_perf(path);
+                else if (strcmp(mode, "mid") == 0) devfreq_mid_perf(path);
+                else devfreq_normal(path);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+void mtk_cpu_ppm_limit(const char *mode) {
+    if (access("/proc/ppm/policy/hard_userlimit_max_cpu_freq", F_OK) != 0) return;
+    
+    int cluster_id = 0;
+    for (int i = 0; i < 16; i++) {
+        char path_max[128], path_min[128];
+        snprintf(path_max, sizeof(path_max), "/sys/devices/system/cpu/cpufreq/policy%d/cpuinfo_max_freq", i);
+        snprintf(path_min, sizeof(path_min), "/sys/devices/system/cpu/cpufreq/policy%d/cpuinfo_min_freq", i);
+        
+        if (access(path_max, F_OK) == 0) {
+            char max_f[32] = {0}, min_f[32] = {0};
+            raread(path_max, max_f, sizeof(max_f));
+            raread(path_min, min_f, sizeof(min_f));
+            max_f[strcspn(max_f, "\n")] = 0;
+            min_f[strcspn(min_f, "\n")] = 0;
+            
+            char cmd[64];
+            if (strcmp(mode, "awaken") == 0) {
+                snprintf(cmd, sizeof(cmd), "%d -1", cluster_id); 
+                rawrite(cmd, "/proc/ppm/policy/hard_userlimit_max_cpu_freq");
+                snprintf(cmd, sizeof(cmd), "%d %s", cluster_id, max_f); 
+                rawrite(cmd, "/proc/ppm/policy/hard_userlimit_min_cpu_freq");
+            } else if (strcmp(mode, "powersave") == 0) {
+                char avail_path[128];
+                snprintf(avail_path, sizeof(avail_path), "/sys/devices/system/cpu/cpufreq/policy%d/scaling_available_frequencies", i);
+                FreqData target;
+                if (config.ultra_powersave == 1) {
+                    target = get_target_freq(avail_path, 1); // 1 = minfreq
+                } else if (config.lite_powersave == 1) {
+                    target = get_target_freq(avail_path, 2); // 2 = midfreq
+                } else {
+                    target = get_target_freq(avail_path, 3); // 3 = -2 from max
+                }
+                char target_str[32];
+                if (target.freq != -1) {
+                    snprintf(target_str, sizeof(target_str), "%ld", target.freq);
+                } else {
+                    strncpy(target_str, min_f, sizeof(target_str)); // Fallback
+                }
+                
+                snprintf(cmd, sizeof(cmd), "%d %s", cluster_id, target_str); 
+                rawrite(cmd, "/proc/ppm/policy/hard_userlimit_max_cpu_freq");
+                
+                if (config.ultra_powersave == 1) {
+                    snprintf(cmd, sizeof(cmd), "%d %s", cluster_id, min_f);
+                    rawrite(cmd, "/proc/ppm/policy/hard_userlimit_min_cpu_freq");
+                } else {
+                    snprintf(cmd, sizeof(cmd), "%d -1", cluster_id); 
+                    rawrite(cmd, "/proc/ppm/policy/hard_userlimit_min_cpu_freq");
+                }
+            } else {
+                snprintf(cmd, sizeof(cmd), "%d -1", cluster_id); 
+                rawrite(cmd, "/proc/ppm/policy/hard_userlimit_max_cpu_freq");
+                snprintf(cmd, sizeof(cmd), "%d -1", cluster_id); 
+                rawrite(cmd, "/proc/ppm/policy/hard_userlimit_min_cpu_freq");
+            }
+            cluster_id++;
+        }
+    }
+}
+
+void mtk_get_mid_freq(char *out) {
+    char buffer[4096];
+    int count = 0; 
+    if (raread("/proc/gpufreqv2/gpu_working_opp_table", buffer, sizeof(buffer)) > 0 ||
+        raread("/proc/gpufreq/gpufreq_opp_dump", buffer, sizeof(buffer)) > 0) {
+        char *saveptr;
+        char *line = strtok_r(buffer, "\n", &saveptr);
+        while (line != NULL && count < 50) {
+            if (strchr(line, '[')) count++;
+            line = strtok_r(NULL, "\n", &saveptr);
+        }
+    }
+    if (count > 0) snprintf(out, 32, "%d", (count - 1) / 2);
+    else strcpy(out, "");
+}
+
+void mtk_disable_gpu_custom_boost() {
+    rawrite("\n", "/sys/kernel/ged/hal/custom_boost_gpu_freq");
+}
+
+void mediatek_awaken() {
+    mtk_cpu_ppm_limit("awaken");
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // GED Tweaks
+    const char *ged_base = "/sys/module/ged/parameters";
+    const char *ged_files[] = {
+        "gx_boost_on", "gx_game_mode", "ged_smart_boost", "enable_gpu_boost",
+        "ged_boost_enable", "gx_frc_mode", "cpu_boost_policy", "boost_extra"
+    };
+    int ged_count = sizeof(ged_files) / sizeof(ged_files[0]);
+    raco_bulk(ged_base, ged_files, ged_count, "1", 1);
+
+
+    // PNPMGR
+    const char *pnp_base = "/sys/pnpmgr";
+    const char *pnp_files[] = {"mwn", "boost_enable"};
+    int pnp_count = sizeof(pnp_files) / sizeof(pnp_files[0]);
+    raco_bulk(pnp_base, pnp_files, pnp_count, "1", 1);
+    
+    rawrite("turbo", "/sys/pnpmgr/boost_mode");
+
+    // GED HAL
+    const char *ged_hal = "/sys/kernel/ged/hal";
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_base_dvfs_step"); rawrite("2", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_stride_size"); rawrite("1", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_window_size"); rawrite("16", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "gpu_boost_level"); rawrite("100", path_buf);
+
+    // Standalone Mediatek Tweaks
+    rawrite("1", "/proc/cpufreq/cpufreq_cci_mode");
+    rawrite("3", "/proc/cpufreq/cpufreq_power_mode");
+    rawrite("1", "/sys/kernel/fpsgo/fbt/ultra_rescue");
+    rawrite("0", "/sys/kernel/fpsgo/fbt/thrm_enable");
+    rawrite("1", "/sys/module/mtk_fpsgo/parameters/xgf_uboost");
+    rawrite("1", "/proc/cpufreq/cpufreq_sched_disable");
+    mtk_mali_devfreq("max");
+    rawrite("1", "/sys/devices/platform/boot_dramboost/dramboost/dramboost");
+    if (config.device_mitigation == 1) {
+        rawrite("2", "/sys/devices/system/cpu/eas/enable");
+        rawrite("stop 0", "/proc/mtk_batoc_throttling/battery_oc_protect_stop");
+    } else {
+        rawrite("0", "/sys/devices/system/cpu/eas/enable");
+        rawrite("stop 1", "/proc/mtk_batoc_throttling/battery_oc_protect_stop");
+    }
+
+    // GPU Tweaks
+    rawrite("0", "/sys/devices/platform/10012000.dvfsrc/helio-dvfsrc/dvfsrc_req_ddr_opp");
+    rawrite("0", "/sys/kernel/helio-dvfsrc/dvfsrc_force_vcore_dvfs_opp");
+
+
+    // Power Limits
+    if (config.device_mitigation == 1) {
+        const char *power_limits[] = {
+            "ignore_batt_oc 0", "ignore_batt_percent 0", "ignore_low_batt 0",
+            "ignore_thermal_protect 0", "ignore_pbm_limited 0"
+        };
+        for (int i = 0; i < 5; i++) rawrite(power_limits[i], "/proc/gpufreq/gpufreq_power_limited");
+    } else {
+        const char *power_limits[] = {
+            "ignore_batt_oc 1", "ignore_batt_percent 1", "ignore_low_batt 1",
+            "ignore_thermal_protect 1", "ignore_pbm_limited 1"
+        };
+        for (int i = 0; i < 5; i++) rawrite(power_limits[i], "/proc/gpufreq/gpufreq_power_limited");
+    }
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+    if (config.lite_performance == 1) {
+        char mid_idx[32];
+        mtk_get_mid_freq(mid_idx);
+        if (strlen(mid_idx) > 0) rakakikomi(mid_idx, "/proc/gpufreqv2/fix_target_opp_index");
+        else rakakikomi("0", "/proc/gpufreqv2/fix_target_opp_index");
+    } else {
+        rakakikomi("0", "/proc/gpufreqv2/fix_target_opp_index");
+    }
+
+    // Defreq Tweaks
+    if (config.device_mitigation != 1) {
+        devfreq_max("/sys/class/devfreq/mtk-dvfsrc-devfreq");
+    }
+    set_gpu_governor("mali", "performance");
+}
+
+void mediatek_balanced() {
+    mtk_cpu_ppm_limit("balanced");
+    rawrite("0", "/sys/kernel/fpsgo/fbt/ultra_rescue");
+    rawrite("1", "/sys/kernel/fpsgo/fbt/thrm_enable");
+    rawrite("0", "/sys/module/mtk_fpsgo/parameters/xgf_uboost");
+    rawrite("0", "/proc/cpufreq/cpufreq_sched_disable");
+    mtk_mali_devfreq("mid");
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // GED Tweaks
+    const char *ged_base = "/sys/module/ged/parameters";
+    const char *ged_files[] = {
+        "gx_boost_on", "gx_game_mode", "ged_smart_boost", "enable_gpu_boost",
+        "ged_boost_enable", "gx_frc_mode", "cpu_boost_policy", "boost_extra"
+    };
+    int ged_count = sizeof(ged_files) / sizeof(ged_files[0]);
+    raco_bulk(ged_base, ged_files, ged_count, "0", 0);
+
+    // PNPMGR
+    const char *pnp_base = "/sys/pnpmgr";
+    const char *pnp_files[] = {"mwn", "boost_enable", "boost_mode"};
+    int pnp_count = sizeof(pnp_files) / sizeof(pnp_files[0]);
+    raco_bulk(pnp_base, pnp_files, pnp_count, "0", 1);
+
+    // GED HAL
+    const char *ged_hal = "/sys/kernel/ged/hal";
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_base_dvfs_step"); rawrite("4", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_stride_size"); rawrite("2", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_window_size"); rawrite("8", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "gpu_boost_level"); rawrite("-1", path_buf);
+
+    // Standalone Mediatek Tweaks
+    rawrite("0", "/proc/cpufreq/cpufreq_cci_mode");
+    rawrite("0", "/proc/cpufreq/cpufreq_power_mode");
+    rawrite("0", "/sys/devices/platform/boot_dramboost/dramboost/dramboost");
+    rawrite("2", "/sys/devices/system/cpu/eas/enable");
+    rawrite("stop 0", "/proc/mtk_batoc_throttling/battery_oc_protect_stop");
+
+    // GPU Tweaks
+    rawrite("-1", "/sys/devices/platform/10012000.dvfsrc/helio-dvfsrc/dvfsrc_req_ddr_opp");
+    rawrite("-1", "/sys/kernel/helio-dvfsrc/dvfsrc_force_vcore_dvfs_opp");
+
+
+    // Power Limits
+    const char *power_limits[] = {
+        "ignore_batt_oc 0", "ignore_batt_percent 0", "ignore_low_batt 0",
+        "ignore_thermal_protect 0", "ignore_pbm_limited 0"
+    };
+    for (int i = 0; i < 5; i++) rawrite(power_limits[i], "/proc/gpufreq/gpufreq_power_limited");
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+    rakakikomi("0", "/proc/gpufreq/gpufreq_opp_freq");
+    rakakikomi("-1", "/proc/gpufreqv2/fix_target_opp_index");
+    mtk_disable_gpu_custom_boost();
+
+    // Defreq Tweaks
+    devfreq_mid_perf("/sys/class/devfreq/mtk-dvfsrc-devfreq");
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+void mediatek_normal() {
+    mtk_cpu_ppm_limit("normal");
+    rawrite("0", "/sys/kernel/fpsgo/fbt/ultra_rescue");
+    rawrite("1", "/sys/kernel/fpsgo/fbt/thrm_enable");
+    rawrite("0", "/sys/module/mtk_fpsgo/parameters/xgf_uboost");
+    rawrite("0", "/proc/cpufreq/cpufreq_sched_disable");
+    mtk_mali_devfreq("normal");
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // GED Tweaks
+    const char *ged_base = "/sys/module/ged/parameters";
+    const char *ged_files[] = {
+        "gx_boost_on", "gx_game_mode", "ged_smart_boost", "enable_gpu_boost",
+        "ged_boost_enable", "gx_frc_mode", "cpu_boost_policy", "boost_extra"
+    };
+    int ged_count = sizeof(ged_files) / sizeof(ged_files[0]);
+    raco_bulk(ged_base, ged_files, ged_count, "0", 0);
+
+    // PNPMGR
+    const char *pnp_base = "/sys/pnpmgr";
+    const char *pnp_files[] = {"mwn", "boost_enable", "boost_mode"};
+    int pnp_count = sizeof(pnp_files) / sizeof(pnp_files[0]);
+    raco_bulk(pnp_base, pnp_files, pnp_count, "0", 1);
+
+    // GED HAL
+    const char *ged_hal = "/sys/kernel/ged/hal";
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_base_dvfs_step"); rawrite("4", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_stride_size"); rawrite("2", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_window_size"); rawrite("8", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "gpu_boost_level"); rawrite("-1", path_buf);
+
+    // Standalone Mediatek Tweaks
+    rawrite("0", "/proc/cpufreq/cpufreq_cci_mode");
+    rawrite("0", "/proc/cpufreq/cpufreq_power_mode");
+    rawrite("0", "/sys/devices/platform/boot_dramboost/dramboost/dramboost");
+    rawrite("2", "/sys/devices/system/cpu/eas/enable");
+    rawrite("stop 0", "/proc/mtk_batoc_throttling/battery_oc_protect_stop");
+
+    // GPU Tweaks
+    rakakikomi("-1", "/sys/devices/platform/10012000.dvfsrc/helio-dvfsrc/dvfsrc_req_ddr_opp");
+    rakakikomi("-1", "/sys/kernel/helio-dvfsrc/dvfsrc_force_vcore_dvfs_opp");
+
+
+    // Power Limits
+    const char *power_limits[] = {
+        "ignore_batt_oc 0", "ignore_batt_percent 0", "ignore_low_batt 0",
+        "ignore_thermal_protect 0", "ignore_pbm_limited 0"
+    };
+    for (int i = 0; i < 5; i++) rawrite(power_limits[i], "/proc/gpufreq/gpufreq_power_limited");
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+    rakakikomi("0", "/proc/gpufreq/gpufreq_opp_freq");
+    rakakikomi("-1", "/proc/gpufreqv2/fix_target_opp_index");
+    mtk_disable_gpu_custom_boost();
+
+    // Defreq Tweaks
+    devfreq_normal("/sys/class/devfreq/mtk-dvfsrc-devfreq");
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+void mediatek_powersave() {
+/*
+NOTE!!!
+
+Mediatek gpufreqv2 have a problem. If try to go back to default from powersave
+It still stucked to minfreq. Therefore it's wise to keep GPU untouched on powersave
+
+Strangely, if from performance to normal, it works properly. So I must say it's 
+From Mediatek GPU Driver itself. 
+
+Signed-off-by: KanagawaYamada albert.wesley.dion@gmail.com
+*/
+    mtk_cpu_ppm_limit("powersave");
+    rawrite("1", "/proc/cpufreq/cpufreq_power_mode");
+    rawrite("0", "/sys/kernel/fpsgo/fbt/ultra_rescue");
+    rawrite("1", "/sys/kernel/fpsgo/fbt/thrm_enable");
+    rawrite("0", "/sys/module/mtk_fpsgo/parameters/xgf_uboost");
+    rawrite("0", "/proc/cpufreq/cpufreq_sched_disable");
+    mtk_mali_devfreq("normal");
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // GED Tweaks
+    const char *ged_base = "/sys/module/ged/parameters";
+    const char *ged_files[] = {
+        "gx_boost_on", "gx_game_mode", "ged_smart_boost", "enable_gpu_boost",
+        "ged_boost_enable", "gx_frc_mode", "cpu_boost_policy", "boost_extra"
+    };
+    int ged_count = sizeof(ged_files) / sizeof(ged_files[0]);
+    raco_bulk(ged_base, ged_files, ged_count, "0", 0);
+
+    // PNPMGR
+    const char *pnp_base = "/sys/pnpmgr";
+    const char *pnp_files[] = {"mwn", "boost_enable", "boost_mode"};
+    int pnp_count = sizeof(pnp_files) / sizeof(pnp_files[0]);
+    raco_bulk(pnp_base, pnp_files, pnp_count, "0", 1);
+
+    // GED HAL
+    const char *ged_hal = "/sys/kernel/ged/hal";
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_base_dvfs_step"); rawrite("4", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_stride_size"); rawrite("2", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "loading_window_size"); rawrite("8", path_buf);
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", ged_hal, "gpu_boost_level"); rawrite("-1", path_buf);
+
+    // Standalone Mediatek Tweaks
+    rawrite("0", "/proc/cpufreq/cpufreq_cci_mode");
+    rawrite("0", "/sys/devices/platform/boot_dramboost/dramboost/dramboost");
+    rawrite("2", "/sys/devices/system/cpu/eas/enable");
+    rawrite("stop 0", "/proc/mtk_batoc_throttling/battery_oc_protect_stop");
+
+    // GPU Tweaks
+    rakakikomi("-1", "/sys/devices/platform/10012000.dvfsrc/helio-dvfsrc/dvfsrc_req_ddr_opp");
+    rakakikomi("-1", "/sys/kernel/helio-dvfsrc/dvfsrc_force_vcore_dvfs_opp");
+
+
+    // Power Limits
+    const char *power_limits[] = {
+        "ignore_batt_oc 0", "ignore_batt_percent 0", "ignore_low_batt 0",
+        "ignore_thermal_protect 0", "ignore_pbm_limited 0"
+    };
+    for (int i = 0; i < 5; i++) rawrite(power_limits[i], "/proc/gpufreq/gpufreq_power_limited");
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+    rawrite("1", "/proc/cpufreq/cpufreq_power_mode");
+    
+    rakakikomi("0", "/proc/gpufreq/gpufreq_opp_freq");
+    rakakikomi("-1", "/proc/gpufreqv2/fix_target_opp_index");
+    mtk_disable_gpu_custom_boost();
+
+    // Defreq Tweaks
+    devfreq_normal("/sys/class/devfreq/mtk-dvfsrc-devfreq");
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+// ==============================
+// SNAPDRAGON DEVICES
+// ==============================
+
+void snapdragon_core_ctl_apply(const char *val, int lock) {
+    DIR *dir;
+    struct dirent *ent;
+
+    if ((dir = opendir("/sys/devices/system/cpu")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strncmp(ent->d_name, "cpu", 3) == 0) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/system/cpu/%s/core_ctl/enable", ent->d_name);
+
+                if (access(path, F_OK) == 0) {
+                    if (lock == 1) {
+                        rawrite(val, path);
+                    } else {
+                        rakakikomi(val,path);
+                    }
+                }
+            }
+        }
+        closedir(dir);
+    }
+}
+
+static void qcom_cpudcvs_max_perf(const char *path) {
+    char avail[256], hw_min[256], hw_max[256];
+    snprintf(avail, sizeof(avail), "%s/available_frequencies", path);
+    snprintf(hw_min, sizeof(hw_min), "%s/hw_min_freq", path);
+    snprintf(hw_max, sizeof(hw_max), "%s/hw_max_freq", path);
+
+    FreqData f_max = get_target_freq(avail, 0);
+    if (f_max.freq == -1) return;
+
+    char v_max[32];
+    snprintf(v_max, sizeof(v_max), "%ld", f_max.freq);
+    rawrite(v_max, hw_max);
+    rawrite(v_max, hw_min);
+}
+
+static void qcom_cpudcvs_mid_perf(const char *path) {
+    char avail[256], hw_min[256], hw_max[256];
+    snprintf(avail, sizeof(avail), "%s/available_frequencies", path);
+    snprintf(hw_min, sizeof(hw_min), "%s/hw_min_freq", path);
+    snprintf(hw_max, sizeof(hw_max), "%s/hw_max_freq", path);
+
+    FreqData f_max = get_target_freq(avail, 0);
+    FreqData f_mid = get_target_freq(avail, 2);
+    if (f_max.freq == -1) return;
+
+    char v_max[32], v_mid[32];
+    snprintf(v_max, sizeof(v_max), "%ld", f_max.freq);
+    snprintf(v_mid, sizeof(v_mid), "%ld", f_mid.freq);
+    
+    rawrite(v_max, hw_max);
+    rawrite(v_mid, hw_min);
+}
+
+static void qcom_cpudcvs_unlock(const char *path) {
+    char avail[256], hw_min[256], hw_max[256];
+    snprintf(avail, sizeof(avail), "%s/available_frequencies", path);
+    snprintf(hw_min, sizeof(hw_min), "%s/hw_min_freq", path);
+    snprintf(hw_max, sizeof(hw_max), "%s/hw_max_freq", path);
+
+    FreqData f_max = get_target_freq(avail, 0);
+    FreqData f_min = get_target_freq(avail, 1);
+    if (f_max.freq == -1) return;
+
+    char v_max[32], v_min[32];
+    snprintf(v_max, sizeof(v_max), "%ld", f_max.freq);
+    snprintf(v_min, sizeof(v_min), "%ld", f_min.freq);
+    
+    rakakikomi(v_min, hw_min);
+    rakakikomi(v_max, hw_max);
+}
+
+void snapdragon_devfreq_apply(int mode) {
+    if(config.device_mitigation == 1) return;
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/class/devfreq")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+
+            if ((strstr(ent->d_name, "cpu") && strstr (ent->d_name, "-lat")) ||
+                (strstr(ent->d_name, "cpu") && strstr (ent->d_name, "-bw")) ||
+                strstr(ent->d_name, "llccbw") ||
+                strstr (ent->d_name, "bus_llcc") ||
+                strstr(ent->d_name, "bus_ddr") ||
+                strstr (ent->d_name, "memlat") ||
+                strstr(ent->d_name, "cpubw") ||
+                strstr (ent->d_name, "kgsl-ddr-qos")) {
+                
+                char path[256];
+                
+                snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
+
+                    if (mode == 0) devfreq_max(path);
+                    else if (mode == 1) devfreq_normal(path);
+                    else if (mode == 2) devfreq_mid_perf(path);
+            }
+        }
+        closedir(dir);
+    }
+    const char *dcvs_paths[] = {
+        "/sys/devices/system/cpu/bus_dcvs/DDR",
+        "/sys/devices/system/cpu/bus_dcvs/LLCC",
+        "/sys/devices/system/cpu/bus_dcvs/L3"
+    };
+    for (int i = 0; i < 3; i++) {
+        if (mode == 0) qcom_cpudcvs_max_perf(dcvs_paths[i]);
+        else if (mode == 1) qcom_cpudcvs_unlock(dcvs_paths[i]);
+        else if (mode == 2) qcom_cpudcvs_mid_perf(dcvs_paths[i]);
+    }
+}
+
+void snapdragon_set_kgsl_pwrlevel(int mode) {
+    char num_buf[32] = {0};
+    int max_idx = 5; // fallback
+    if (raread("/sys/class/kgsl/kgsl-3d0/num_pwrlevels", num_buf, sizeof(num_buf)) > 0) {
+        max_idx = atoi(num_buf) - 1;
+        if (max_idx < 0) max_idx = 5;
+    }
+    
+    char min_val[16];
+    if (mode == 0) {
+        // Max perf
+        rawrite("0", "/sys/class/kgsl/kgsl-3d0/min_pwrlevel");
+        rawrite("0", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel");
+    } else if (mode == 2) {
+        // Mid perf
+        snprintf(min_val, sizeof(min_val), "%d", max_idx / 2);
+        rawrite(min_val, "/sys/class/kgsl/kgsl-3d0/min_pwrlevel");
+        rawrite("0", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel");
+    } else {
+        // Release
+        snprintf(min_val, sizeof(min_val), "%d", max_idx);
+        rawrite(min_val, "/sys/class/kgsl/kgsl-3d0/min_pwrlevel");
+        rawrite("0", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel");
+    }
+}
+
+// Device Performance Settings
+void snapdragon_sched_tune(int mode) {
+    if (mode == 0) { // Awaken
+        rawrite("75", "/proc/sys/kernel/sched_upmigrate");
+        rawrite("65", "/proc/sys/kernel/sched_downmigrate");
+        rawrite("85", "/proc/sys/kernel/sched_group_upmigrate");
+        rawrite("8", "/proc/sys/kernel/sched_group_downmigrate");
+    } else if (mode == 2) { // Balanced
+        rawrite("85", "/proc/sys/kernel/sched_upmigrate");
+        rawrite("75", "/proc/sys/kernel/sched_downmigrate");
+        rawrite("90", "/proc/sys/kernel/sched_group_upmigrate");
+        rawrite("8", "/proc/sys/kernel/sched_group_downmigrate");
+    } else { // Normal/Powersave
+        rawrite("95", "/proc/sys/kernel/sched_upmigrate");
+        rawrite("85", "/proc/sys/kernel/sched_downmigrate");
+        rawrite("100", "/proc/sys/kernel/sched_group_upmigrate");
+        rawrite("10", "/proc/sys/kernel/sched_group_downmigrate");
+    }
+}
+
+void snapdragon_awaken() {
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // Force CLK & PWR Level
+    const char *kgsl_base = "/sys/class/kgsl/kgsl-3d0";
+    const char *kgsl_1[] = {"force_clk_on", "default_pwrlevel"};
+    raco_bulk(kgsl_base, kgsl_1, 2, "1", 1);
+    
+    snapdragon_set_kgsl_pwrlevel(0);
+
+    // Bus Split & Throttling
+    if (config.device_mitigation == 1) {
+        const char *kgsl_0[] = {"bus_split", "throttling"};
+        raco_bulk(kgsl_base, kgsl_0, 2, "1", 1);
+    } else {
+        const char *kgsl_0[] = {"bus_split", "throttling"};
+        raco_bulk(kgsl_base, kgsl_0, 2, "0", 1);
+    }
+
+    // Adreno Boost
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", kgsl_base, "devfreq/adrenoboost");
+    rawrite("3", path_buf);
+
+    // MSM Parameters & Touch Boost Freq
+    const char *msm_base = "/sys/module/msm_perfmon/parameters";
+    const char *msm_files[] = {"touch_boost_enable", "touch_boost_freq"};
+    raco_bulk(msm_base, msm_files, 2, "1", 1);
+
+    rawrite("1", "/sys/module/msm_performance/parameters/touchboost"); // Enable Touchboost
+    rawrite("Y", "/sys/module/adreno_idler/parameters/adreno_idler_active"); // Set Adreno Idl
+
+    snapdragon_core_ctl_apply("0", 1);
+    snapdragon_sched_tune(0);
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+
+    snapdragon_devfreq_apply(0);
+    if (config.device_mitigation != 1) {
+        devfreq_max("/sys/class/kgsl/kgsl-3d0/devfreq");
+    }
+    rawrite("performance", "/sys/class/kgsl/kgsl-3d0/devfreq/governor");
+}
+
+void snapdragon_balanced() {
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // Force CLK & PWR Level
+    const char *kgsl_base = "/sys/class/kgsl/kgsl-3d0";
+    const char *kgsl_1[] = {"force_clk_on", "default_pwrlevel"};
+    raco_bulk(kgsl_base, kgsl_1, 2, "0", 0);
+    
+    snapdragon_set_kgsl_pwrlevel(2);
+
+    // Bus Split & Throttling
+    const char *kgsl_0[] = {"bus_split", "throttling"};
+    raco_bulk(kgsl_base, kgsl_0, 2, "1", 0);
+
+    // Adreno Boost
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", kgsl_base, "devfreq/adrenoboost");
+    rakakikomi("0", path_buf);
+
+    // MSM Parameters & Touch Boost Freq
+    const char *msm_base = "/sys/module/msm_perfmon/parameters";
+    const char *msm_files[] = {"touch_boost_enable", "touch_boost_freq"};
+    raco_bulk(msm_base, msm_files, 2, "0", 0);
+
+    rakakikomi("0", "/sys/module/msm_performance/parameters/touchboost"); // Enable Touchboost
+    rakakikomi("N", "/sys/module/adreno_idler/parameters/adreno_idler_active"); // Set Adreno Idl
+
+    snapdragon_core_ctl_apply("0", 0);
+    snapdragon_sched_tune(2);
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+
+    snapdragon_devfreq_apply(2);
+    devfreq_mid_perf("/sys/class/kgsl/kgsl-3d0/devfreq");
+    rawrite("simple_ondemand", "/sys/class/kgsl/kgsl-3d0/devfreq/governor");
+}
+
+void snapdragon_normal() {
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // Force CLK & PWR Level
+    const char *kgsl_base = "/sys/class/kgsl/kgsl-3d0";
+    const char *kgsl_1[] = {"force_clk_on", "default_pwrlevel"};
+    raco_bulk(kgsl_base, kgsl_1, 2, "0", 0);
+    
+    snapdragon_set_kgsl_pwrlevel(1);
+
+    // Bus Split & Throttling
+    const char *kgsl_0[] = {"bus_split", "throttling"};
+    raco_bulk(kgsl_base, kgsl_0, 2, "1", 0);
+
+    // Adreno Boost
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", kgsl_base, "devfreq/adrenoboost");
+    rakakikomi("0", path_buf);
+
+    // MSM Parameters & Touch Boost Freq
+    const char *msm_base = "/sys/module/msm_perfmon/parameters";
+    const char *msm_files[] = {"touch_boost_enable", "touch_boost_freq"};
+    raco_bulk(msm_base, msm_files, 2, "0", 0);
+
+    rakakikomi("0", "/sys/module/msm_performance/parameters/touchboost"); // Enable Touchboost
+    rakakikomi("N", "/sys/module/adreno_idler/parameters/adreno_idler_active"); // Set Adreno Idl
+
+    snapdragon_core_ctl_apply("0", 0);
+    snapdragon_sched_tune(1);
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+
+    snapdragon_devfreq_apply(1);
+    devfreq_normal("/sys/class/kgsl/kgsl-3d0/devfreq");
+    rawrite("msm-adreno-tz", "/sys/class/kgsl/kgsl-3d0/devfreq/governor");
+}
+
+void snapdragon_powersave() {
+    // ==============================
+    // MISC TWEAKS
+    // ==============================
+
+    // Force CLK & PWR Level
+    const char *kgsl_base = "/sys/class/kgsl/kgsl-3d0";
+    const char *kgsl_1[] = {"force_clk_on", "default_pwrlevel"};
+    raco_bulk(kgsl_base, kgsl_1, 2, "0", 0);
+    
+    snapdragon_set_kgsl_pwrlevel(1);
+
+    // Bus Split & Throttling
+    const char *kgsl_0[] = {"bus_split", "throttling"};
+    raco_bulk(kgsl_base, kgsl_0, 2, "1", 0);
+
+    // Adreno Boost
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", kgsl_base, "devfreq/adrenoboost");
+    rakakikomi("0", path_buf);
+
+    // MSM Parameters & Touch Boost Freq
+    const char *msm_base = "/sys/module/msm_perfmon/parameters";
+    const char *msm_files[] = {"touch_boost_enable", "touch_boost_freq"};
+    raco_bulk(msm_base, msm_files, 2, "0", 0);
+
+    rakakikomi("0", "/sys/module/msm_performance/parameters/touchboost"); // Enable Touchboost
+    rakakikomi("Y", "/sys/module/adreno_idler/parameters/adreno_idler_active"); // Set Adreno Idl
+
+    snapdragon_core_ctl_apply("0", 0);
+    snapdragon_sched_tune(1);
+
+    // ==============================
+    // GPU & FREQ TWEAKS
+    // ==============================
+
+    snapdragon_devfreq_apply(1);
+    devfreq_normal("/sys/class/kgsl/kgsl-3d0/devfreq");
+    rawrite("powersave", "/sys/class/kgsl/kgsl-3d0/devfreq/governor");
+}
+
+// =================================================================
+// MINOR CHIPSETS HELPER FUNCTIONS (Exynos, Unisoc, Tensor, Tegra)
+// =================================================================
+
+void scan_minor_devfreq_and_apply(const char *target, int mode) {
+    if (config.device_mitigation == 1) return;
+
+    DIR *dir;
+    struct dirent *ent;
+
+    if ((dir = opendir("/sys/class/devfreq")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, target)) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/class/devfreq/%s", ent->d_name);
+
+                if (mode == 0) devfreq_max(path);
+                else if (mode == 1) devfreq_normal(path);
+                else if (mode == 2) devfreq_mid_perf(path);
+                else if (mode == 3) devfreq_min_perf(path);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+void set_custom_gpu_bounds(const char *base, const char *avail, const char *max_f, const char *min_f, int mode) {
+    char avail_path[256], max_path[256], min_path[256];
+    snprintf(avail_path, sizeof(avail_path), "%s/%s", base, avail);
+    snprintf(max_path, sizeof(max_path), "%s/%s", base, max_f);
+    snprintf(min_path, sizeof(min_path), "%s/%s", base, min_f);
+
+    FreqData f_max = get_target_freq(avail_path, 0);
+    FreqData f_min = get_target_freq(avail_path, 1);
+    FreqData f_mid = get_target_freq(avail_path, 2);
+
+    if (f_max.freq == -1) return;
+
+    char v_max[32], v_min[32], v_mid[32];
+    snprintf(v_max, sizeof(v_max), "%ld", f_max.freq);
+    snprintf(v_min, sizeof(v_min), "%ld", f_min.freq);
+    snprintf(v_mid, sizeof(v_mid), "%ld", f_mid.freq);
+
+    if (mode == 0) {
+        rawrite(v_max, max_path); rawrite(v_max, min_path);
+    } else if (mode == 1) {
+        rakakikomi(v_max, max_path); rakakikomi(v_min, min_path);
+    } else if (mode == 2) {
+        rawrite(v_max, max_path); rawrite(v_mid, min_path);
+    } else if (mode == 3) {
+        rawrite(v_min, max_path); rawrite(v_min, min_path);
+    }
+}
+
+// ==============================
+// EXYNOS DEVICES
+// ==============================
+
+void exynos_awaken() {
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s/power_policy", ent->d_name);
+                rawrite("always_on", path); break;
+            }
+        }
+        closedir(dir);
+    }
+    set_custom_gpu_bounds("/sys/kernel/gpu", "gpu_available_frequencies", "gpu_max_clock", "gpu_min_clock", 0);
+    scan_minor_devfreq_and_apply("devfreq_mif", 0);
+    set_gpu_governor("mali", "performance");
+}
+
+void exynos_balanced() {
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s/power_policy", ent->d_name);
+                rakakikomi("coarse_demand", path); break;
+            }
+        }
+        closedir(dir);
+    }
+    set_custom_gpu_bounds("/sys/kernel/gpu", "gpu_available_frequencies", "gpu_max_clock", "gpu_min_clock", 2);
+    scan_minor_devfreq_and_apply("devfreq_mif", 2);
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+void exynos_normal() {
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s/power_policy", ent->d_name);
+                rakakikomi("coarse_demand", path); break;
+            }
+        }
+        closedir(dir);
+    }
+    set_custom_gpu_bounds("/sys/kernel/gpu", "gpu_available_frequencies", "gpu_max_clock", "gpu_min_clock", 1);
+    scan_minor_devfreq_and_apply("devfreq_mif", 1);
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+void exynos_powersave() {
+    set_custom_gpu_bounds("/sys/kernel/gpu", "gpu_available_frequencies", "gpu_max_clock", "gpu_min_clock", 1);   
+    set_gpu_governor("mali", "powersave");
+}
+
+// ==============================
+// UNISOC DEVICES
+// ==============================
+
+static void unisoc_uscfreq_tune(const char *mode) {
+    DIR *dir;
+    struct dirent *ent;
+    if ((dir = opendir("/sys/devices/system/cpu/cpufreq")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strncmp(ent->d_name, "policy", 6) == 0) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpufreq/%s/uscfreq", ent->d_name);
+                if (access(path, F_OK) == 0) {
+                    char freq_margin[300]; snprintf(freq_margin, sizeof(freq_margin), "%s/freq_margin", path);
+                    char down_rate[300]; snprintf(down_rate, sizeof(down_rate), "%s/down_rate_limit_us", path);
+                    char up_rate[300]; snprintf(up_rate, sizeof(up_rate), "%s/up_rate_limit_us", path);
+                    
+                    if (strcmp(mode, "awaken") == 0) {
+                        rawrite("50", freq_margin);
+                        rawrite("10000", down_rate);
+                        rawrite("0", up_rate);
+                    } else if (strcmp(mode, "balanced") == 0) {
+                        rawrite("30", freq_margin);
+                        rawrite("2000", down_rate);
+                        rawrite("500", up_rate);
+                    } else if (strcmp(mode, "normal") == 0) {
+                        rawrite("15", freq_margin);
+                        rawrite("1000", down_rate);
+                        rawrite("1000", up_rate);
+                    } else if (strcmp(mode, "powersave") == 0) {
+                        rawrite("5", freq_margin);
+                        rawrite("500", down_rate);
+                        rawrite("2000", up_rate);
+                    }
+                }
+            }
+        }
+        closedir(dir);
+    }
+}
+
+static void unisoc_ddr_tune(const char *mode) {
+    if (strcmp(mode, "awaken") == 0) {
+        rawrite("1866", "/sys/class/devfreq/scene-frequency/sprd-governor/scaling_force_ddr_freq");
+    } else if (strcmp(mode, "balanced") == 0) {
+        rawrite("1244", "/sys/class/devfreq/scene-frequency/sprd-governor/scaling_force_ddr_freq");
+    } else {
+        rawrite("0", "/sys/class/devfreq/scene-frequency/sprd-governor/scaling_force_ddr_freq");
+    }
+}
+
+void unisoc_awaken() {
+    scan_minor_devfreq_and_apply(".gpu", 0);
+    unisoc_uscfreq_tune("awaken");
+    unisoc_ddr_tune("awaken");
+    if (access("/sys/module/zte_misc/parameters/thermal_control_en", F_OK) == 0) {
+        rawrite("0", "/sys/module/zte_misc/parameters/thermal_control_en");
+    }
+    set_gpu_governor(".gpu", "performance");
+}
+
+void unisoc_balanced() {
+    scan_minor_devfreq_and_apply(".gpu", 2);
+    unisoc_uscfreq_tune("balanced");
+    unisoc_ddr_tune("balanced");
+    if (access("/sys/module/zte_misc/parameters/thermal_control_en", F_OK) == 0) {
+        rawrite("1", "/sys/module/zte_misc/parameters/thermal_control_en");
+    }
+    set_gpu_governor(".gpu", "simple_ondemand");
+}
+
+void unisoc_normal() {
+    scan_minor_devfreq_and_apply(".gpu", 1);
+    unisoc_uscfreq_tune("normal");
+    unisoc_ddr_tune("normal");
+    if (access("/sys/module/zte_misc/parameters/thermal_control_en", F_OK) == 0) {
+        rawrite("1", "/sys/module/zte_misc/parameters/thermal_control_en");
+    }
+    set_gpu_governor(".gpu", "simple_ondemand");
+}
+
+void unisoc_powersave() {
+    scan_minor_devfreq_and_apply(".gpu", 1);
+    unisoc_uscfreq_tune("powersave");
+    unisoc_ddr_tune("powersave");
+    if (access("/sys/module/zte_misc/parameters/thermal_control_en", F_OK) == 0) {
+        rawrite("1", "/sys/module/zte_misc/parameters/thermal_control_en");
+    }
+    set_gpu_governor(".gpu", "powersave");
+}
+
+// ==============================
+// TENSOR DEVICES
+// ==============================
+
+void tensor_awaken() {
+    scan_minor_devfreq_and_apply("devfreq_mif", 0);
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s", ent->d_name);
+                set_custom_gpu_bounds(path, "available_frequencies", "scaling_max_freq", "scaling_min_freq", 0);
+            }
+        }
+        closedir(dir);
+    }
+    set_gpu_governor("mali", "performance");
+}
+
+void tensor_balanced() {
+    scan_minor_devfreq_and_apply("devfreq_mif", 2);
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s", ent->d_name);
+                set_custom_gpu_bounds(path, "available_frequencies", "scaling_max_freq", "scaling_min_freq", 2);
+            }
+        }
+        closedir(dir);
+    }
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+void tensor_normal() {
+    scan_minor_devfreq_and_apply("devfreq_mif", 1);
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s", ent->d_name);
+                set_custom_gpu_bounds(path, "available_frequencies", "scaling_max_freq", "scaling_min_freq", 1);
+            }
+        }
+        closedir(dir);
+    }
+    set_gpu_governor("mali", "simple_ondemand");
+}
+
+void tensor_powersave() {
+    scan_minor_devfreq_and_apply("devfreq_mif", 1);
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/devices/platform")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (strstr(ent->d_name, ".mali")) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/devices/platform/%s", ent->d_name);
+                set_custom_gpu_bounds(path, "available_frequencies", "scaling_max_freq", "scaling_min_freq", 1);
+            }
+        }
+        closedir(dir);
+    }
+    set_gpu_governor("mali", "powersave");
+}
+
+// ==============================
+// TEGRA DEVICES
+// ==============================
+
+void tegra_awaken() { set_custom_gpu_bounds("/sys/kernel/tegra_gpu", "available_frequencies", "gpu_cap_rate", "gpu_floor_rate", 0); }
+void tegra_balanced() { set_custom_gpu_bounds("/sys/kernel/tegra_gpu", "available_frequencies", "gpu_cap_rate", "gpu_floor_rate", 2); }
+void tegra_normal() { set_custom_gpu_bounds("/sys/kernel/tegra_gpu", "available_frequencies", "gpu_cap_rate", "gpu_floor_rate", 1); }
+void tegra_powersave() { set_custom_gpu_bounds("/sys/kernel/tegra_gpu", "available_frequencies", "gpu_cap_rate", "gpu_floor_rate", 1); }

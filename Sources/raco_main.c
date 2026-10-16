@@ -1,0 +1,552 @@
+/*
+Project Suisei - Performance Module
+Copyright (C) 2026 Kanagawa Yamada 
+ */
+
+#include "raco.h"
+
+
+// Generic IO Tweaks
+void apply_io_tweaks(const char *iostats, const char *add_random, const char *read_ahead_kb, const char *nr_requests, int lock) {
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/block")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] != '.' && strncmp(ent->d_name, "loop", 4) != 0) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/block/%s/queue/iostats", ent->d_name);
+                lock ? rawrite(iostats, path) : rakakikomi(iostats, path);
+                
+                snprintf(path, sizeof(path), "/sys/block/%s/queue/add_random", ent->d_name);
+                lock ? rawrite(add_random, path) : rakakikomi(add_random, path);
+                
+                snprintf(path, sizeof(path), "/sys/block/%s/queue/read_ahead_kb", ent->d_name);
+                lock ? rawrite(read_ahead_kb, path) : rakakikomi(read_ahead_kb, path);
+                
+                snprintf(path, sizeof(path), "/sys/block/%s/queue/nr_requests", ent->d_name);
+                lock ? rawrite(nr_requests, path) : rakakikomi(nr_requests, path);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+// Generic Network Tweaks
+void apply_net_tweaks(const char *low_lat, const char *ecn, const char *fastopen, const char *timestamps, int lock) {
+    const char *base = "/proc/sys/net/ipv4";
+    char p[256];
+    snprintf(p, sizeof(p), "%s/tcp_low_latency", base); lock ? rawrite(low_lat, p) : rakakikomi(low_lat, p);
+    snprintf(p, sizeof(p), "%s/tcp_ecn", base); lock ? rawrite(ecn, p): rakakikomi (ecn, p);
+    snprintf(p, sizeof(p), "%s/tcp_fastopen", base); lock ? rawrite(fastopen, p): rakakikomi (fastopen, p);
+    snprintf(p, sizeof(p), "%s/tcp_timestamps", base); lock ? rawrite(timestamps, p): rakakikomi (timestamps, p);
+}
+
+// Routing of SOCs
+void route_soc(int mode) {
+    // 4 = Awaken, 3 = Balanced, 2 = Powersave, 1 = Normal
+    switch(config.soc) {
+        case 1: // Mediatek
+            if (mode == 4) mediatek_awaken(); else if(mode == 3) mediatek_balanced();
+            else if (mode == 2) mediatek_powersave(); else if (mode == 1) mediatek_normal(); break;
+        case 2: // Snapdragon
+            if (mode == 4) snapdragon_awaken(); else if(mode == 3) snapdragon_balanced();
+            else if (mode == 2) snapdragon_powersave(); else if (mode == 1) snapdragon_normal(); break;
+        case 3: // Exynos
+            if (mode == 4) exynos_awaken(); else if(mode == 3) exynos_balanced();
+            else if (mode == 2) exynos_powersave(); else if (mode == 1) exynos_normal(); break;
+        case 4: // UniSoc
+            if (mode == 4) unisoc_awaken(); else if(mode == 3) unisoc_balanced();
+            else if (mode == 2) unisoc_powersave(); else if (mode == 1) unisoc_normal(); break;
+        case 5: // Tensor
+            if (mode == 4) tensor_awaken(); else if(mode == 3) tensor_balanced();
+            else if (mode == 2) tensor_powersave(); else if (mode == 1) tensor_normal(); break;
+        case 6: // Tegra
+            if (mode == 4) tegra_awaken(); else if(mode == 3) tegra_balanced();
+            else if (mode == 2) tegra_powersave(); else if (mode == 1) tegra_normal(); break;
+    }
+}
+
+// Carlotta CPU
+void carlotta_cpu(int hardlock) {
+    pid_t pid_fork = fork();
+    if (pid_fork == 0) {
+
+        long long u1 = 0, n1 = 0, s1 = 0, i1 = 0, io1 = 0, irq1 = 0, sirq1 = 0, st1 = 0;
+        long long u2 = 0, n2 = 0, s2 = 0, i2 = 0, io2 = 0, irq2 = 0, sirq2 = 0, st2 = 0;
+        int current_load = 0;
+        char buffer[4096];
+
+        if (raread("/proc/stat", buffer, sizeof(buffer)) > 0) {
+            sscanf(buffer, "cpu %lld %lld %lld %lld %lld %lld %lld %lld", &u1, &n1, &s1, &i1, &io1, &irq1, &sirq1, &st1);
+
+            usleep(100000); // Measure Delta
+
+            if (raread("/proc/stat", buffer, sizeof(buffer)) > 0) {
+                sscanf(buffer, "cpu %lld %lld %lld %lld %lld %lld %lld %lld", &u2, &n2, &s2, &i2, &io2, &irq2, &sirq2, &st2);
+
+                long long total1 = u1 + n1 + s1 + i1 + io1 + irq1 + sirq1 + st1;
+                long long idle1 = i1 + io1;
+
+                long long total2 = u2 + n2 + s2 + i2 + io2 + irq2 + sirq2 + st2;
+                long long idle2 = i2 + io2;
+
+                long long diff_total = total2 - total1;
+                long long diff_idle = idle2 - idle1;
+
+                if (diff_total > 0) {
+                    long long load = (1000 * (diff_total - diff_idle)) / diff_total;
+                    int adjusted_load = load / 10;
+
+                    int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+                    if (num_cores < 1) num_cores = 1;
+
+                    if (num_cores > 8) {
+                        adjusted_load = (adjusted_load * 8) / num_cores;
+                    }
+                    current_load = adjusted_load;
+                }
+            } 
+        }
+        int target_percent = (current_load > hardlock) ? hardlock : current_load;
+
+        char cmd[512];
+        pid_t pid = getpid();
+        snprintf(cmd, sizeof(cmd), 
+                 "setprop debug.hwui.target_cpu_time_percent %d; "
+                 "iorenice %d 7 idle >/dev/null 2>&1; "
+                 "renice -n 19 -p %d >/dev/null 2>&1; "
+                 "taskset -ap 1 %d >/dev/null 2>&1", 
+                 target_percent, pid, pid, pid);
+        system(cmd);
+        
+        exit(0);
+    }
+}
+
+// Corin Function
+void corin_storage(const char *sched, const char *rq) {
+    DIR *dir; struct dirent *ent;
+    if ((dir = opendir("/sys/block")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] != '.' && strncmp(ent->d_name, "loop", 4) != 0) {
+                char path[256];
+                snprintf(path, sizeof(path), "/sys/block/%s/queue/scheduler", ent->d_name);
+                rawrite(sched, path);
+
+                snprintf(path, sizeof(path), "/sys/block/%s/queue/rq_affinity", ent->d_name);
+                rawrite(rq, path);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+
+
+// Master Profiles
+void mode_awaken() {
+    printf("PROGRESS: 30\n"); fflush(stdout);
+    apply_io_tweaks("0", "0", "32", "32", 1);
+    apply_net_tweaks("1", "1", "3", "0", 1);
+    rawrite("0", "/proc/sys/vm/page-cluster");
+    rawrite("80", "/proc/sys/vm/vfs_cache_pressure");
+    printf("PROGRESS: 50\n"); fflush(stdout);
+    carlotta_cpu(80);
+
+    corin_storage("none", "1");
+    pid_t sys_pid_awaken = fork();
+    if (sys_pid_awaken == 0) {
+        rawrite("3", "/proc/sys/vm/drop_caches");
+        system("settings put secure high_priority 1; settings put secure low_priority 0; "
+               "cmd power set-adaptive-power-saver-enabled false; "
+               "cmd power set-fixed-performance-mode-enabled false; "
+               "cmd looper_stats disable; "
+               "cmd power set-mode 0 & "
+               "atrace --async_stop >/dev/null 2>&1; "
+               "cmd looper_stats reset >/dev/null 2>&1; "
+               "setprop debug.debuggerd.wait_for_debugger false; "
+               "setprop debug.debuggerd.wait_for_gdb false; "
+               "setprop debug.debuggerd.disable 1 & "
+               "dumpsys binder_calls_stats --reset >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable-detailed-tracking >/dev/null 2>&1; "
+               "dumpsys procstats --clear >/dev/null 2>&1; "
+               "dumpsys procstats --stop-testing >/dev/null 2>&1 & "
+               "cmd display ab-logging-disable >/dev/null 2>&1; "
+               "cmd display dwb-logging-disable >/dev/null 2>&1; "
+               "cmd display dmd-logging-disable >/dev/null 2>&1; "
+               "logcat -G 64K >/dev/null 2>&1; logcat -c >/dev/null 2>&1 &");
+        exit(0);
+    }
+
+    printf("PROGRESS: 70\n"); fflush(stdout);
+
+    // CPU SETTINGS: Order matters. Set Gov, Safety Wait, Then Apply Profile
+    if (config.lite_performance == 1) {
+        change_cpu_gov(config.default_gov);
+    } else {
+        change_cpu_gov("performance");
+    }
+    printf("PROGRESS: 90\n"); fflush(stdout);
+    usleep(150000);
+    cpufreq_awaken();
+    route_soc(4);
+
+    anyamelfissa();
+    dnd_on();
+    printf("PROGRESS: 100\n"); fflush(stdout);
+    notification("Performance Mode Activated");
+}
+
+void mode_balanced() {
+    printf("PROGRESS: 40\n"); fflush(stdout);
+    apply_io_tweaks("1", "1", "128", "128", 0);
+    apply_net_tweaks("0", "2", "1", "1", 0);
+
+    rakakikomi("3", "/proc/sys/vm/page-cluster");
+    rakakikomi("120", "/proc/sys/vm/vfs_cache_pressure");
+    carlotta_cpu(55);
+
+    corin_storage("none", "1");
+    pid_t sys_pid_balanced = fork();
+    if (sys_pid_balanced == 0) {
+        rawrite("3", "/proc/sys/vm/drop_caches");
+        system("settings put secure high_priority 1; settings put secure low_priority 0; "
+               "cmd power set-adaptive-power-saver-enabled false; "
+               "cmd power set-fixed-performance-mode-enabled false; "
+               "cmd looper_stats enable; "
+               "cmd power set-mode 0 & "
+               "atrace --async_stop >/dev/null 2>&1; "
+               "cmd looper_stats reset >/dev/null 2>&1; "
+               "cmd looper_stats disable >/dev/null 2>&1 & "
+               "for app in $(pm list packages | cut -d: -f2); do pm log-visibility --disable $app; done >/dev/null 2>&1 & "
+               "dumpsys binder_calls_stats --reset >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable-detailed-tracking >/dev/null 2>&1; "
+               "dumpsys procstats --clear >/dev/null 2>&1; "
+               "dumpsys procstats --stop-testing >/dev/null 2>&1 & "
+               "cmd display ab-logging-disable >/dev/null 2>&1; "
+               "cmd display dwb-logging-disable >/dev/null 2>&1; "
+               "cmd display dmd-logging-disable >/dev/null 2>&1 & "
+               "for f in $(dumpsys window | grep \"^  Proto:\" | sed 's/^  Proto: //' | tr ' ' '\\n'; dumpsys window | grep \"^  Logcat:\" | sed 's/^  Logcat: //' | tr ' ' '\\n'); do wm logging disable \"$f\"; wm logging disable-text \"$f\"; done >/dev/null 2>&1 &");
+        exit(0);
+    }
+
+    printf("PROGRESS: 80\n"); fflush(stdout);
+    // CPU SETTINGS
+    change_cpu_gov(config.default_gov);
+    cpufreq_balanced();
+    route_soc(3);
+
+    anyakawaii();
+    dnd_off();
+    printf("PROGRESS: 100\n"); fflush(stdout);
+    notification("Balanced Mode Activated");
+}
+
+void mode_powersave() {
+    printf("PROGRESS: 10\n"); fflush(stdout);
+    printf("PROGRESS: 30\n"); fflush(stdout);
+    apply_io_tweaks("1", "1", "128", "128", 0);
+    apply_net_tweaks("0", "2", "1", "1", 0);
+
+    rakakikomi("3", "/proc/sys/vm/page-cluster");
+    rakakikomi("100", "/proc/sys/vm/vfs_cache_pressure");
+    carlotta_cpu(40);
+
+    corin_storage("none", "2");
+    pid_t sys_pid_powersave = fork();
+    if (sys_pid_powersave == 0) {
+        rawrite("3", "/proc/sys/vm/drop_caches");
+        system("settings put secure high_priority 0; settings put secure low_priority 1; "
+               "cmd power set-adaptive-power-saver-enabled true; "
+               "cmd power set-fixed-performance-mode-enabled false; "
+               "cmd looper_stats enable; "
+               "cmd power set-mode 0 & "
+               "atrace --async_stop >/dev/null 2>&1; "
+               "cmd looper_stats reset >/dev/null 2>&1; "
+               "cmd looper_stats disable >/dev/null 2>&1 & "
+               "for app in $(pm list packages | cut -d: -f2); do pm log-visibility --disable $app; done >/dev/null 2>&1 & "
+               "dumpsys binder_calls_stats --reset >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable-detailed-tracking >/dev/null 2>&1; "
+               "dumpsys procstats --clear >/dev/null 2>&1; "
+               "dumpsys procstats --stop-testing >/dev/null 2>&1 & "
+               "cmd display ab-logging-disable >/dev/null 2>&1; "
+               "cmd display dwb-logging-disable >/dev/null 2>&1; "
+               "cmd display dmd-logging-disable >/dev/null 2>&1 & "
+               "for f in $(dumpsys window | grep \"^  Proto:\" | sed 's/^  Proto: //' | tr ' ' '\\n'; dumpsys window | grep \"^  Logcat:\" | sed 's/^  Logcat: //' | tr ' ' '\\n'); do wm logging disable \"$f\"; wm logging disable-text \"$f\"; done >/dev/null 2>&1 &");
+        exit(0);
+    }
+    
+    printf("PROGRESS: 70\n"); fflush(stdout);
+    // CPU SETTINGS
+    // 1. Set powersave gov to default gov
+    change_cpu_gov(config.default_gov);
+    printf("PROGRESS: 90\n"); fflush(stdout);
+    usleep(150000);
+    // 2. Apply limits
+    cpufreq_powersave();
+    route_soc(2);
+
+    anyakawaii();
+    dnd_off();
+    printf("PROGRESS: 100\n"); fflush(stdout);
+    notification("Powersave Mode Activated");
+}
+
+void clear_adpf() {
+    system("setprop debug.hwui.use_hint_manager false");
+    system("setprop debug.sf.enable_adpf_cpu_hint false");
+}
+
+void mode_normal() {
+    printf("PROGRESS: 20\n"); fflush(stdout);
+    printf("PROGRESS: 50\n"); fflush(stdout);
+    apply_io_tweaks("1", "1", "128", "128", 0);
+    apply_net_tweaks("0", "2", "1", "1", 0);
+
+    rakakikomi("3", "/proc/sys/vm/page-cluster");
+    rakakikomi("120", "/proc/sys/vm/vfs_cache_pressure");
+    carlotta_cpu(55);
+    clear_adpf();
+
+    corin_storage("none", "1");
+    pid_t sys_pid_normal = fork();
+    if (sys_pid_normal == 0) {
+        system("settings delete system pointer_speed; resetprop --delete windowsmgr.max_events_per_sec; "
+               "settings put secure high_priority 1; settings put secure low_priority 0; "
+               "cmd power set-adaptive-power-saver-enabled false; "
+               "cmd power set-fixed-performance-mode-enabled false; "
+               "cmd looper_stats enable; "
+               "cmd power set-mode 0 & "
+               "atrace --async_stop >/dev/null 2>&1; "
+               "cmd looper_stats reset >/dev/null 2>&1; "
+               "cmd looper_stats disable >/dev/null 2>&1 & "
+               "for app in $(pm list packages | cut -d: -f2); do pm log-visibility --disable $app; done >/dev/null 2>&1 & "
+               "dumpsys binder_calls_stats --reset >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable >/dev/null 2>&1; "
+               "dumpsys binder_calls_stats --disable-detailed-tracking >/dev/null 2>&1; "
+               "dumpsys procstats --clear >/dev/null 2>&1; "
+               "dumpsys procstats --stop-testing >/dev/null 2>&1 & "
+               "cmd display ab-logging-disable >/dev/null 2>&1; "
+               "cmd display dwb-logging-disable >/dev/null 2>&1; "
+               "cmd display dmd-logging-disable >/dev/null 2>&1 & "
+               "for f in $(dumpsys window | grep \"^  Proto:\" | sed 's/^  Proto: //' | tr ' ' '\\n'; dumpsys window | grep \"^  Logcat:\" | sed 's/^  Logcat: //' | tr ' ' '\\n'); do wm logging disable \"$f\"; wm logging disable-text \"$f\"; done >/dev/null 2>&1 &");
+        exit(0);
+    }
+
+    printf("PROGRESS: 80\n"); fflush(stdout);
+    // CPU SETTINGS: set governor
+    change_cpu_gov(config.default_gov);
+    cpufreq_normal();
+    route_soc(1);
+
+    anyakawaii();
+    dnd_off();
+    printf("PROGRESS: 100\n"); fflush(stdout);
+    notification("Balanced Mode Activated");
+}
+
+void mode_gaming_pro() {
+    printf("PROGRESS: 10\n"); fflush(stdout);
+    mode_awaken();
+    printf("PROGRESS: 80\n"); fflush(stdout);
+    kill_all();
+    printf("PROGRESS: 100\n"); fflush(stdout);
+    notification("Gaming Pro Mode Activated");
+}
+
+void mode_cooldown() {
+    mode_powersave();
+    notification("Cool Down initiated for 2 minutes...");
+    
+    pid_t pid = fork();
+    if (pid == 0) {
+        sleep(120);
+        mode_balanced();
+        notification("Cool Down finished. Switched to Balanced Mode.");
+        exit(0);
+    }
+}
+
+void mode_reset() {
+    printf("PROGRESS: 20\n"); fflush(stdout);
+    kill_all();
+    printf("PROGRESS: 100\n"); fflush(stdout);
+    notification("All background applications cleared.");
+}
+
+void rswap_resume(const char *pkg) {
+    if (config.rswap == 1) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "pidof %s", pkg);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char pids[256];
+            if (fgets(pids, sizeof(pids), fp) != NULL) {
+                char *saveptr;
+                char *pid_str = strtok_r(pids, " \n", &saveptr);
+                while (pid_str != NULL) {
+                    char oom_path[256];
+                    snprintf(oom_path, sizeof(oom_path), "/proc/%s/oom_score_adj", pid_str);
+                    rawrite("-1000", oom_path);
+                    
+                    char kill_cmd[128];
+                    snprintf(kill_cmd, sizeof(kill_cmd), "kill -CONT %s", pid_str);
+                    system(kill_cmd);
+                    
+                    pid_str = strtok_r(NULL, " \n", &saveptr);
+                }
+            }
+            pclose(fp);
+        }
+        
+        char rm_cmd[256];
+        snprintf(rm_cmd, sizeof(rm_cmd), "rm -f /data/ProjectSuisei/RSWAPTrack/rswap_stop_%s", pkg);
+        system(rm_cmd);
+    }
+}
+
+void rswap_suspend(const char *pkg) {
+    if (config.rswap == 1 && pkg != NULL && strlen(pkg) > 0) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "pidof %s", pkg);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char pids[256];
+            if (fgets(pids, sizeof(pids), fp) != NULL) {
+                char *saveptr;
+                char *pid_str = strtok_r(pids, " \n", &saveptr);
+                while (pid_str != NULL) {
+                    char kill_cmd[128];
+                    snprintf(kill_cmd, sizeof(kill_cmd), "kill -STOP %s", pid_str);
+                    system(kill_cmd);
+                    
+                    pid_str = strtok_r(NULL, " \n", &saveptr);
+                }
+            }
+            pclose(fp);
+        }
+        
+        char nohup_cmd[512];
+        snprintf(nohup_cmd, sizeof(nohup_cmd), "mkdir -p /data/ProjectSuisei/RSWAPTrack; touch /data/ProjectSuisei/RSWAPTrack/rswap_stop_%s; nohup sh -c 'sleep 172800; if [ -f /data/ProjectSuisei/RSWAPTrack/rswap_stop_%s ]; then for p in $(pidof %s); do kill -9 $p; done; rm -f /data/ProjectSuisei/RSWAPTrack/rswap_stop_%s; fi' >/dev/null 2>&1 &", pkg, pkg, pkg, pkg);
+        system(nohup_cmd);
+    }
+}
+
+void update_state_in_config(int mode) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "grep -q '^STATE' /data/ProjectSuisei/raco.txt && sed -i 's/^STATE.*/STATE %d/' /data/ProjectSuisei/raco.txt || echo 'STATE %d' >> /data/ProjectSuisei/raco.txt", mode, mode);
+    system(cmd);
+}
+
+// Main Execution
+
+extern char current_pkg[256];
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        return 1;
+    }
+
+    if (argc >= 3) {
+        strncpy(current_pkg, argv[2], sizeof(current_pkg) - 1);
+        current_pkg[sizeof(current_pkg) - 1] = '\0';
+    }
+
+    load_config("/data/ProjectSuisei/raco.txt");
+
+    if (strcmp(argv[1], "fstrim") == 0) {
+        run_fstrim();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "clearcache") == 0) {
+        clear_cache();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "load") == 0) {
+        if (argc >= 3) {
+            printf("Game Assistant Loaded for: %s\n", argv[2]);
+            int load_mode = 4;
+            if (argc >= 4) {
+                load_mode = atoi(argv[3]);
+                update_state_in_config(load_mode);
+                switch(load_mode) {
+                    case 4: mode_awaken(); break;
+                    case 3: mode_balanced(); break;
+                    case 2: mode_powersave(); break;
+                    case 1: mode_normal(); break;
+                    case 5: mode_gaming_pro(); break;
+                    default: mode_awaken(); break;
+                }
+            } else {
+                update_state_in_config(4);
+                mode_awaken();
+            }
+            rswap_resume(argv[2]);
+            
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[1], "unload") == 0) {
+        printf("Game Assistant Unloaded\n");
+        // Restore to normal mode when exiting a game
+        update_state_in_config(1);
+        mode_normal();
+        
+        system("if [ -f /data/ProjectSuisei/ayunda_active ]; then sh /data/ProjectSuisei/AyundaRusdi.sh >/dev/null 2>&1; rm -f /data/ProjectSuisei/ayunda_active; fi &");
+
+        if (argc >= 3) {
+            rswap_suspend(argv[2]);
+        }
+        return 0;
+    }
+
+    int mode = atoi(argv[1]);
+    if (mode > 0 && mode <= 7) {
+        update_state_in_config(mode);
+    }
+
+    // Yamada: PLEASE REMEMBER THIS.
+    /*
+    7 = Reset -> Kills all apps and clears background without changing tuning
+    6 = Cooldown -> Drops to powersave for 2 mins to cool, then balanced
+    5 = Gaming Pro -> Awaken + Kills all apps
+    4 = Awaken
+    3 = Balanced -> Keep in mind "Balanced" here is term of balanced performance, so half them minfreq
+    2 = Powersave
+    1 = Normal -> This is the one who restores all to default
+    */
+
+    switch (mode) {
+        case 4:
+            mode_awaken();
+            break;
+        case 3:
+            mode_balanced();
+            break;
+        case 2:
+            mode_powersave();
+            break;
+        case 1:
+            mode_normal();
+            break;
+        case 5:
+            mode_gaming_pro();
+            break;
+        case 6:
+            mode_cooldown();
+            break;
+        case 7:
+            mode_reset();
+            break;
+        default:
+            printf("Error: Invalid mode '%d'. Mission aborted.\n", mode);
+            return 1;
+    }
+
+    return 0;
+}

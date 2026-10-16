@@ -1,0 +1,838 @@
+package zx.project.suisei.UtilitiesPages
+
+import zx.project.suisei.ui.theme.GlassCard
+
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.verticalScroll
+
+import zx.project.suisei.R
+import androidx.compose.ui.res.stringResource
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.*
+
+private const val SYS_CONFIG = "/data/ProjectSuisei/raco.txt"
+
+private suspend fun sysRunRoot(cmd: String): String = withContext(Dispatchers.IO) {
+    try {
+        kotlinx.coroutines.withTimeoutOrNull(5000L) {
+            val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start()
+            p.outputStream.close()
+            val out = p.inputStream.bufferedReader().use { it.readText() }
+            p.waitFor(); out
+        } ?: ""
+    } catch (e: Exception) { "" }
+}
+
+private suspend fun sysWriteKey(key: String, value: String) {
+    sysRunRoot("grep -q '^$key ' $SYS_CONFIG && sed -i 's|^$key .*|$key $value|' $SYS_CONFIG || echo '$key $value' >> $SYS_CONFIG")
+}
+
+private suspend fun sysSetAyundaRusdiEnabled(enabled: Boolean) {
+    val v = if (enabled) "1" else "0"
+    sysRunRoot("grep -q '^AYUNDA_RUSDI ' $SYS_CONFIG && sed -i 's|^AYUNDA_RUSDI .*|AYUNDA_RUSDI $v|' $SYS_CONFIG || echo 'AYUNDA_RUSDI $v' >> $SYS_CONFIG")
+}
+
+private suspend fun sysUpdateAyundaScript(r: Float, g: Float, b: Float, s: Float) {
+    val scriptPath = "/data/ProjectSuisei/AyundaRusdi.sh"
+    val content = """#!/system/bin/sh
+# Project Suisei - Screen Modifier Boot Settings
+service call SurfaceFlinger 1015 i32 1 f $r f 0 f 0 f 0 f 0 f $g f 0 f 0 f 0 f 0 f $b f 0 f 0 f 0 f 0 f 1
+service call SurfaceFlinger 1022 f $s
+"""
+    sysRunRoot("echo '$content' > $scriptPath && chmod +x $scriptPath")
+    sysRunRoot("sh $scriptPath")
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SystemScreen(onBack: () -> Unit) {
+    var isLoading by remember { mutableStateOf(true) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // State
+    var anyaThermalEnabled by remember { mutableStateOf(false) }
+    var anyaThermalGen2 by remember { mutableStateOf(false) }
+    var sandevIncluded by remember { mutableStateOf(false) }
+    var sandevDurationText by remember { mutableStateOf("10") }
+
+    var graphicsDriver by remember { mutableIntStateOf(0) }
+
+    var isBusyAnya by remember { mutableStateOf(false) }
+    
+    val prefs = context.getSharedPreferences("raco_ui_prefs", android.content.Context.MODE_PRIVATE)
+
+    var rgbR by remember { mutableFloatStateOf(prefs.getFloat("RGB_R", 1f)) }
+    var rgbG by remember { mutableFloatStateOf(prefs.getFloat("RGB_G", 1f)) }
+    var rgbB by remember { mutableFloatStateOf(prefs.getFloat("RGB_B", 1f)) }
+    var rgbS by remember { mutableFloatStateOf(prefs.getFloat("RGB_S", 1f)) }
+
+    var isBusySandev by remember { mutableStateOf(false) }
+    var isBusyGraphics by remember { mutableStateOf(false) }
+    var isBusyFstrim by remember { mutableStateOf(false) }
+    var isBusyClearCache by remember { mutableStateOf(false) }
+    var fstrimResult by remember { mutableStateOf("") }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    
+    var showPresetPage by remember { mutableStateOf(false) }
+    
+    var customPresets by remember { 
+        mutableStateOf<Map<String, List<Float>>>(
+            prefs.getStringSet("ayunda_presets", emptySet<String>())?.associate {
+                val parts = it.split("::")
+                val vals = parts[1].split(",").map { v -> v.toFloat() }
+                parts[0] to vals
+            } ?: emptyMap()
+        )
+    }
+    
+    val builtinPresets = mapOf(
+        "Vivid" to listOf(1.2f, 1.1f, 1.1f, 1.3f),
+        "Vivid+" to listOf(1.3f, 1.2f, 1.2f, 2.0f),
+        "B&W" to listOf(1.0f, 1.0f, 1.0f, 0.0f),
+        "Eagle Eye" to listOf(1.1f, 1.0f, 0.9f, 1.4f),
+        "Night Vision" to listOf(0.7f, 1.2f, 1.0f, 0.8f),
+        "Warm" to listOf(1.1f, 1.0f, 0.9f, 1.0f),
+        "Hunter" to listOf(0.9f, 1.2f, 0.9f, 1.3f),
+        "Sniper" to listOf(1.1f, 1.1f, 0.9f, 1.2f),
+        "Ultra-Clear" to listOf(1.05f, 1.05f, 1.05f, 1.2f),
+        "Pure" to listOf(1.0f, 1.0f, 1.0f, 0.9f),
+        "Cyberpunk" to listOf(1.2f, 0.9f, 1.3f, 1.5f),
+        "Instrument" to listOf(0.3f, 1.5f, 0.3f, 1.0f),
+        "Movie" to listOf(1.1f, 1.0f, 0.9f, 0.95f),
+        "Sketch" to listOf(1.5f, 1.5f, 1.5f, 0.1f),
+        "Film" to listOf(1.2f, 1.1f, 0.8f, 1.1f),
+        "Crayon" to listOf(1.3f, 1.3f, 1.3f, 1.2f),
+        "Oil Painting" to listOf(1.2f, 1.1f, 0.9f, 1.4f)
+    )
+    var activePresetName by remember { mutableStateOf(prefs.getString("active_ayunda_preset", "") ?: "") }
+
+    if (showPresetPage) {
+        AyundaPresetPage(
+            customPresets = customPresets,
+            builtinPresets = builtinPresets,
+            onSavePreset = { name, vals ->
+                val newPresets = customPresets + (name to vals)
+                customPresets = newPresets
+                prefs.edit().putStringSet("ayunda_presets", newPresets.map { "${it.key}::${it.value.joinToString(",")}" }.toSet()).apply()
+            },
+            onDeletePreset = { name ->
+                val newPresets = customPresets - name
+                customPresets = newPresets
+                prefs.edit().putStringSet("ayunda_presets", newPresets.map { "${it.key}::${it.value.joinToString(",")}" }.toSet()).apply()
+            },
+            onApplyPreset = { name, vals ->
+                activePresetName = name
+                rgbR = vals[0]; rgbG = vals[1]; rgbB = vals[2]; rgbS = vals[3]
+                scope.launch {
+                    prefs.edit().apply {
+                        putFloat("RGB_R", rgbR); putFloat("RGB_G", rgbG); putFloat("RGB_B", rgbB); putFloat("RGB_S", rgbS)
+                        putString("active_ayunda_preset", name)
+                        apply()
+                    }
+                    val cmdStr = "service call SurfaceFlinger 1015 i32 1 f ${vals[0]} f 0 f 0 f 0 f 0 f ${vals[1]} f 0 f 0 f 0 f 0 f ${vals[2]} f 0 f 0 f 0 f 0 f 1 ; service call SurfaceFlinger 1022 f ${vals[3]}"
+                    sysRunRoot(cmdStr)
+                    sysUpdateAyundaScript(rgbR, rgbG, rgbB, rgbS)
+                    sysSetAyundaRusdiEnabled(true)
+                }
+            },
+            onPreviewValues = { name, vals ->
+                scope.launch {
+                    sysRunRoot("service call SurfaceFlinger 1015 i32 1 f ${vals[0]} f 0 f 0 f 0 f 0 f ${vals[1]} f 0 f 0 f 0 f 0 f ${vals[2]} f 0 f 0 f 0 f 0 f 1 ; service call SurfaceFlinger 1022 f ${vals[3]}")
+                }
+            },
+            currentValues = listOf(rgbR, rgbG, rgbB, rgbS),
+            activePresetName = activePresetName,
+            onBack = { showPresetPage = false }
+        )
+        return
+    }
+
+    LaunchedEffect(Unit) {
+        val config = sysRunRoot("cat $SYS_CONFIG")
+        fun parseFlag(key: String) = Regex("^$key[ \\t]+(\\d)", RegexOption.MULTILINE).find(config)?.groupValues?.getOrNull(1) == "1"
+
+        anyaThermalEnabled = parseFlag("ANYA")
+        anyaThermalGen2 = parseFlag("ANYA_GEN2")
+        sandevIncluded = parseFlag("INCLUDE_SANDEV")
+        sandevDurationText = Regex("^SANDEV_DUR[ \\t]+(\\d+)", RegexOption.MULTILINE).find(config)?.groupValues?.getOrNull(1) ?: "10"
+
+        // Graphics driver
+        val driverOut = sysRunRoot("settings get global updatable_driver_all_apps")
+        graphicsDriver = driverOut.trim().toIntOrNull() ?: 0
+
+
+        // RGB values are now loaded from SharedPreferences directly in state initialization
+
+        isLoading = false
+    }
+
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.snapshotFlow { listOf(rgbR, rgbG, rgbB, rgbS) }
+            .conflate()
+            .collect { values ->
+                if (!isLoading) {
+                    if (activePresetName == "") {
+                        sysRunRoot("service call SurfaceFlinger 1015 i32 1 f ${values[0]} f 0 f 0 f 0 f 0 f ${values[1]} f 0 f 0 f 0 f 0 f ${values[2]} f 0 f 0 f 0 f 0 f 1 ; service call SurfaceFlinger 1022 f ${values[3]}")
+                    }
+                }
+            }
+    }
+
+
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.system_title)) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, titleContentColor = MaterialTheme.colorScheme.primary, navigationIconContentColor = MaterialTheme.colorScheme.primary)
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = Color.Transparent
+    ) { padding ->
+        val alpha by androidx.compose.animation.core.animateFloatAsState(
+            targetValue = if (isLoading) 0f else 1f,
+            animationSpec = androidx.compose.animation.core.tween(150), label = ""
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp).alpha(alpha),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp)
+        ) {
+            // Anya Thermal Card
+            item {
+                SystemCard(stringResource(R.string.anya_installer_title)) {
+                    Text(stringResource(R.string.anya_installer_desc), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    
+                    Text(stringResource(R.string.anya_gen1_desc), style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.anya_gen2_desc), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(16.dp))
+
+                    val activeAnya = if (anyaThermalGen2) 2 else if (anyaThermalEnabled) 1 else 0
+
+                    listOf(
+                        stringResource(R.string.anya_disabled) to 0, 
+                        stringResource(R.string.anya_gen1) to 1, 
+                        stringResource(R.string.anya_gen2) to 2
+                    ).forEach { (label, value) ->
+                        OutlinedButton(
+                            onClick = {
+                                isBusyAnya = true
+                                scope.launch {
+                                    if (value == 1) {
+                                        sysWriteKey("ANYA", "1")
+                                        sysWriteKey("ANYA_GEN2", "0")
+                                        anyaThermalEnabled = true
+                                        anyaThermalGen2 = false
+                                    } else if (value == 2) {
+                                        sysWriteKey("ANYA", "0")
+                                        sysWriteKey("ANYA_GEN2", "1")
+                                        anyaThermalEnabled = false
+                                        anyaThermalGen2 = true
+                                    } else {
+                                        sysWriteKey("ANYA", "0")
+                                        sysWriteKey("ANYA_GEN2", "0")
+                                        anyaThermalEnabled = false
+                                        anyaThermalGen2 = false
+                                    }
+                                    isBusyAnya = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            enabled = !isBusyAnya,
+                            colors = if (activeAnya == value) ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+                                     else ButtonDefaults.outlinedButtonColors()
+                        ) { Text(label) }
+                    }
+                }
+            }
+
+            // Screen Color Modifiers Card
+            item {
+                SystemCard(stringResource(R.string.screen_modifier_title)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.rusdi),
+                            contentDescription = "Ayunda Rusdi",
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Text(
+                            text = stringResource(R.string.screen_modifier_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    listOf(
+                        Triple(stringResource(R.string.screen_modifier_red), rgbR, Color(0xFFEF5350)),
+                        Triple(stringResource(R.string.screen_modifier_green), rgbG, Color(0xFF66BB6A)),
+                        Triple(stringResource(R.string.screen_modifier_blue), rgbB, Color(0xFF42A5F5)),
+                        Triple(stringResource(R.string.screen_modifier_saturation), rgbS, Color(0xFFAB47BC)),
+                    ).forEachIndexed { idx, (label, value, color) ->
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(10.dp).background(color, shape = androidx.compose.foundation.shape.CircleShape))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = label,
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = color
+                                    )
+                                }
+                                Text(
+                                    text = String.format("%.2f", value),
+                                    fontWeight = FontWeight.Bold,
+                                    color = color,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            Slider(
+                                value = value,
+                                onValueChange = { newVal ->
+                                    when (idx) {
+                                        0 -> rgbR = newVal
+                                        1 -> rgbG = newVal
+                                        2 -> rgbB = newVal
+                                        3 -> rgbS = newVal
+                                    }
+                                },
+                                onValueChangeFinished = {
+                                    activePresetName = ""
+                                    scope.launch {
+                                        prefs.edit().apply {
+                                            putFloat("RGB_R", rgbR)
+                                            putFloat("RGB_G", rgbG)
+                                            putFloat("RGB_B", rgbB)
+                                            putFloat("RGB_S", rgbS)
+                                            putString("active_ayunda_preset", "")
+                                            apply()
+                                        }
+                                        sysUpdateAyundaScript(rgbR, rgbG, rgbB, rgbS)
+                                        sysSetAyundaRusdiEnabled(true)
+                                    }
+                                },
+                                valueRange = 0f..2f,
+                                modifier = Modifier.fillMaxWidth().height(36.dp),
+                                colors = SliderDefaults.colors(thumbColor = color, activeTrackColor = color.copy(alpha = 0.8f), inactiveTrackColor = color.copy(alpha = 0.2f))
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        TextButton(onClick = { showPresetPage = true }) {
+                            Icon(Icons.Default.Tune, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Presets")
+                        }
+
+                        TextButton(
+                            onClick = {
+                                rgbR = 1f; rgbG = 1f; rgbB = 1f; rgbS = 1f
+                                activePresetName = ""
+                                scope.launch {
+                                    prefs.edit().apply {
+                                        putFloat("RGB_R", 1f)
+                                        putFloat("RGB_G", 1f)
+                                        putFloat("RGB_B", 1f)
+                                        putFloat("RGB_S", 1f)
+                                        putString("active_ayunda_preset", "")
+                                        apply()
+                                    }
+                                    sysRunRoot("service call SurfaceFlinger 1015 i32 1 f 1.0 f 0 f 0 f 0 f 0 f 1.0 f 0 f 0 f 0 f 0 f 1.0 f 0 f 0 f 0 f 0 f 1")
+                                    sysRunRoot("service call SurfaceFlinger 1022 f 1.0")
+                                    sysUpdateAyundaScript(1f, 1f, 1f, 1f)
+                                    sysSetAyundaRusdiEnabled(false)
+                                    snackbarHostState.showSnackbar(context.getString(R.string.colors_reset))
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.RestartAlt, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.reset_to_default))
+                        }
+                    }
+                }
+            }
+
+
+
+            // Graphics Driver Card
+            item {
+                SystemCard(stringResource(R.string.graphics_driver)) {
+                    Text(stringResource(R.string.set_the_angle_vulkan_graphics_driver_mode), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    val currentDriverStr = when (graphicsDriver) {
+                        1 -> stringResource(R.string.graphics_driver_game)
+                        2 -> stringResource(R.string.graphics_driver_developer)
+                        else -> stringResource(R.string.graphics_driver_default)
+                    }
+                    Text("${stringResource(R.string.current_driver)} $currentDriverStr", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(16.dp))
+                    listOf(stringResource(R.string.graphics_driver_default) to 0, stringResource(R.string.graphics_driver_game) to 1, stringResource(R.string.graphics_driver_developer) to 2).forEach { (label, value) ->
+                        OutlinedButton(
+                            onClick = {
+                                isBusyGraphics = true
+                                scope.launch {
+                                    sysRunRoot("settings put global updatable_driver_all_apps $value")
+                                    graphicsDriver = value
+                                    isBusyGraphics = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = if (graphicsDriver == value) ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+                                     else ButtonDefaults.outlinedButtonColors()
+                        ) { Text(label) }
+                    }
+                }
+            }
+
+
+            // System Actions Card
+            item {
+                SystemCard(stringResource(R.string.system_actions_title)) {
+                    var cacheProgress by remember { mutableFloatStateOf(0f) }
+
+                    zx.project.suisei.ControlRow(
+                        title = stringResource(R.string.fstrim_title),
+                        desc = stringResource(R.string.trim_filesystem_for_storage_performance),
+                        icon = Icons.Default.Storage,
+                        bgColor = MaterialTheme.colorScheme.surfaceVariant,
+                        isExecuting = isBusyFstrim,
+                        progress = if(isBusyFstrim) 1f else 0f,
+                        isCurrent = false,
+                        enabled = !isBusyFstrim && !isBusyClearCache
+                    ) {
+                        isBusyFstrim = true
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                sysRunRoot("/system/bin/linker64 /data/adb/modules/ProjectSuisei/Compiled/raco fstrim")
+                            } catch (e: Exception) { e.printStackTrace() }
+                            withContext(Dispatchers.Main) {
+                                isBusyFstrim = false
+                                snackbarHostState.showSnackbar(context.getString(R.string.fstrim_completed))
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    zx.project.suisei.ControlRow(
+                        title = stringResource(R.string.clear_cache_title),
+                        desc = stringResource(R.string.remove_system_cache_partition_contents),
+                        icon = Icons.Default.DeleteSweep,
+                        bgColor = MaterialTheme.colorScheme.surfaceVariant,
+                        isExecuting = isBusyClearCache,
+                        progress = cacheProgress,
+                        isCurrent = false,
+                        enabled = !isBusyFstrim && !isBusyClearCache
+                    ) {
+                        isBusyClearCache = true
+                        cacheProgress = 0f
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val p = ProcessBuilder("su", "-c", "/system/bin/linker64 /data/adb/modules/ProjectSuisei/Compiled/raco clearcache").redirectErrorStream(true).start()
+                                p.outputStream.close()
+                                p.inputStream.bufferedReader().forEachLine { line ->
+                                    if (line.startsWith("PROGRESS:")) {
+                                        cacheProgress = line.substringAfter("PROGRESS:").trim().toFloatOrNull()?.div(100f) ?: cacheProgress
+                                        if (cacheProgress >= 1f) return@forEachLine
+                                    }
+                                }
+                                p.waitFor()
+                            } catch (e: Exception) { e.printStackTrace() }
+                            withContext(Dispatchers.Main) {
+                                isBusyClearCache = false
+                                cacheProgress = 0f
+                                snackbarHostState.showSnackbar(context.getString(R.string.cache_cleared))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    GlassCard(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            content()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AyundaPresetPage(
+    customPresets: Map<String, List<Float>>,
+    builtinPresets: Map<String, List<Float>>,
+    onSavePreset: (String, List<Float>) -> Unit,
+    onDeletePreset: (String) -> Unit,
+    onApplyPreset: (String, List<Float>) -> Unit,
+    onPreviewValues: (String, List<Float>) -> Unit,
+    currentValues: List<Float>,
+    activePresetName: String,
+    onBack: () -> Unit
+) {
+    androidx.activity.compose.BackHandler(onBack = onBack)
+    var editingPreset by remember { mutableStateOf<Pair<String, List<Float>>?>(null) }
+    var deleteConfirmName by remember { mutableStateOf<String?>(null) }
+
+    // Delete confirmation dialog
+    if (deleteConfirmName != null) {
+        AlertDialog(
+            onDismissRequest = { deleteConfirmName = null },
+            icon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Delete Preset") },
+            text = { Text("Are you sure you want to delete \"${deleteConfirmName}\"?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeletePreset(deleteConfirmName!!)
+                    deleteConfirmName = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteConfirmName = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Full-page editor
+    if (editingPreset != null) {
+        val (initName, initVals) = editingPreset!!
+        var presetName by remember { mutableStateOf(initName) }
+        var rgbR by remember { mutableFloatStateOf(initVals[0]) }
+        var rgbG by remember { mutableFloatStateOf(initVals[1]) }
+        var rgbB by remember { mutableFloatStateOf(initVals[2]) }
+        var rgbS by remember { mutableFloatStateOf(initVals[3]) }
+        val isCreating = initName.isEmpty()
+
+        LaunchedEffect(Unit) {
+            androidx.compose.runtime.snapshotFlow { listOf(rgbR, rgbG, rgbB, rgbS) }
+                .conflate()
+                .collect { values ->
+                    onPreviewValues(editingPreset?.first ?: "", values)
+                }
+        }
+
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(if (isCreating) "Create Preset" else "Edit Preset") },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            onPreviewValues(activePresetName, currentValues)
+                            editingPreset = null
+                        }) { Icon(Icons.Default.Close, null) }
+                    },
+                    actions = {
+                        TextButton(
+                            onClick = {
+                                if (presetName.isNotBlank()) {
+                                    if (presetName != initName && initName.isNotEmpty()) {
+                                        onDeletePreset(initName)
+                                    }
+                                    val finalVals = listOf(rgbR, rgbG, rgbB, rgbS)
+                                    onSavePreset(presetName, finalVals)
+                                    onApplyPreset(presetName, finalVals)
+                                    editingPreset = null
+                                }
+                            },
+                            enabled = presetName.isNotBlank()
+                        ) {
+                            Text("Save", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        titleContentColor = MaterialTheme.colorScheme.primary,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+            },
+            containerColor = Color.Transparent
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    .padding(horizontal = 16.dp)
+            ) {
+                OutlinedTextField(
+                    value = presetName,
+                    onValueChange = { presetName = it },
+                    label = { Text("Preset Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                // Color preview card
+                GlassCard(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Color Preview", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            listOf(
+                                Triple("R", rgbR, Color(0xFFEF5350)),
+                                Triple("G", rgbG, Color(0xFF66BB6A)),
+                                Triple("B", rgbB, Color(0xFF42A5F5)),
+                                Triple("S", rgbS, Color(0xFFAB47BC))
+                            ).forEach { (label, value, color) ->
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(color.copy(alpha = (value / 2f).coerceIn(0.1f, 1f)), androidx.compose.foundation.shape.CircleShape)
+                                            .border(2.dp, color, androidx.compose.foundation.shape.CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(String.format("%.2f", value), style = MaterialTheme.typography.labelSmall, color = color)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                // Sliders
+                listOf(
+                    Triple("Red", rgbR, Color(0xFFEF5350)),
+                    Triple("Green", rgbG, Color(0xFF66BB6A)),
+                    Triple("Blue", rgbB, Color(0xFF42A5F5)),
+                    Triple("Saturation", rgbS, Color(0xFFAB47BC))
+                ).forEachIndexed { idx, (label, value, color) ->
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(10.dp).background(color, shape = androidx.compose.foundation.shape.CircleShape))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge, color = color)
+                            }
+                            Text(String.format("%.2f", value), fontWeight = FontWeight.Bold, color = color, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Slider(
+                            value = value,
+                            onValueChange = { newVal ->
+                                when (idx) {
+                                    0 -> rgbR = newVal
+                                    1 -> rgbG = newVal
+                                    2 -> rgbB = newVal
+                                    3 -> rgbS = newVal
+                                }
+                            },
+                            valueRange = 0f..2f,
+                            modifier = Modifier.fillMaxWidth().height(36.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = color,
+                                activeTrackColor = color.copy(alpha = 0.8f),
+                                inactiveTrackColor = color.copy(alpha = 0.2f)
+                            )
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+        return
+    }
+
+    // Main preset list page
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Ayunda Presets") },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                actions = {
+                    IconButton(onClick = { editingPreset = "" to currentValues }) {
+                        Icon(Icons.Default.Add, "Add Preset")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, titleContentColor = MaterialTheme.colorScheme.primary, navigationIconContentColor = MaterialTheme.colorScheme.primary)
+            )
+        },
+        containerColor = Color.Transparent
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 24.dp)
+        ) {
+            // Custom Presets Section
+            if (customPresets.isNotEmpty()) {
+                item {
+                    PresetSectionHeader("Custom Presets")
+                }
+                items(customPresets.keys.toList()) { name ->
+                    val vals = customPresets[name]!!
+                    PresetCard(
+                        name = name,
+                        vals = vals,
+                        isCurrent = name == activePresetName,
+                        onClick = { onApplyPreset(name, vals) },
+                        onEdit = { editingPreset = name to vals },
+                        onDelete = { deleteConfirmName = name }
+                    )
+                }
+                item { Spacer(Modifier.height(8.dp)) }
+            }
+
+            // Built-in Presets Section
+            item {
+                PresetSectionHeader("Built-in Presets")
+            }
+            items(builtinPresets.keys.toList()) { name ->
+                val vals = builtinPresets[name]!!
+                PresetCard(
+                    name = name,
+                    vals = vals,
+                    isCurrent = name == activePresetName,
+                    onClick = { onApplyPreset(name, vals) },
+                    onEdit = null,
+                    onDelete = null
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetSectionHeader(title: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.weight(1f).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+        Text(
+            " $title ",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Medium
+        )
+        Box(modifier = Modifier.weight(1f).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+    }
+}
+
+@Composable
+private fun PresetCard(
+    name: String,
+    vals: List<Float>,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+    onEdit: (() -> Unit)?,
+    onDelete: (() -> Unit)?
+) {
+    val bgColor = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val contentColor = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .background(bgColor, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Color dots
+        Row(horizontalArrangement = Arrangement.spacedBy((-4).dp)) {
+            Box(modifier = Modifier.size(14.dp).background(Color(0xFFEF5350).copy(alpha = (vals[0] / 2f).coerceIn(0.15f, 1f)), androidx.compose.foundation.shape.CircleShape).border(1.dp, Color(0xFFEF5350).copy(alpha = 0.6f), androidx.compose.foundation.shape.CircleShape))
+            Box(modifier = Modifier.size(14.dp).background(Color(0xFF66BB6A).copy(alpha = (vals[1] / 2f).coerceIn(0.15f, 1f)), androidx.compose.foundation.shape.CircleShape).border(1.dp, Color(0xFF66BB6A).copy(alpha = 0.6f), androidx.compose.foundation.shape.CircleShape))
+            Box(modifier = Modifier.size(14.dp).background(Color(0xFF42A5F5).copy(alpha = (vals[2] / 2f).coerceIn(0.15f, 1f)), androidx.compose.foundation.shape.CircleShape).border(1.dp, Color(0xFF42A5F5).copy(alpha = 0.6f), androidx.compose.foundation.shape.CircleShape))
+        }
+        Spacer(Modifier.width(12.dp))
+
+        // Name
+        Text(name, fontWeight = FontWeight.SemiBold, color = contentColor, modifier = Modifier.weight(1f))
+
+        // Active check
+        if (isCurrent) {
+            Icon(Icons.Default.Check, "Active", tint = contentColor, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(4.dp))
+        }
+
+        // Edit & Delete buttons (custom presets only)
+        if (onEdit != null) {
+            IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Edit, "Edit", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            }
+        }
+        if (onDelete != null) {
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+
